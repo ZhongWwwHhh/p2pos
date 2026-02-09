@@ -7,6 +7,9 @@ on:
       - dev
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -51,19 +54,27 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
 
-      - name: Generate version number
+      - name: Generate version
         id: version
-        run: echo "version=$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=$(date +'%Y%m%d-%H%M')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v1
+      - name: Create Git tag and push
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Release v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.version }}
           files: |
             p2pos-win.exe/p2pos-win.exe
             p2pos-linux/p2pos-linux
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
