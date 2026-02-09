@@ -1,0 +1,8 @@
+{
+  "init_connections": [
+    {
+      "type": "dns",
+      "address": "init.p2pos.zhongwwwhhh.cc"
+    }
+  ]
+}
