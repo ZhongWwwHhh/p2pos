@@ -6,3 +6,5 @@ test
 database.db
 init_config.json
 init_config.json.used
+/p2pos
+/*.exe

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"p2pos/internal/update"
 	"sync"
 	"syscall"
 	"time"
@@ -156,6 +157,13 @@ func startPingLoop(ctx context.Context, node host.Host, peerTracker *PeerTracker
 }
 
 func main() {
+	// Print version info
+	fmt.Printf("[APP] P2POS version: %s\n", update.Version)
+
+	// Start auto-update checker (check every 6 hours)
+	fmt.Println("[APP] Starting auto-update checker...")
+	update.StartUpdateChecker("ZhongWwwHhh", "Ops-System", 5*time.Minute)
+
 	// Load configuration
 	configPath := "config.json"
 	if len(os.Args) > 1 {
