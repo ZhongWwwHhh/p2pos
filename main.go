@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"p2pos/internal/database"
 	"p2pos/internal/update"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	peerstore "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
@@ -70,16 +73,23 @@ func startDNSCheckLoop(ctx context.Context, node host.Host, dnsAddress string, p
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	checkDNS := func() {
+	checkDNS := func() bool {
+		// DNS discovery is only used for bootstrap.
+		// Once any peer is connected (inbound or outbound), stop further DNS checks.
+		if len(node.Network().Peers()) > 0 {
+			fmt.Printf("[DNS] Existing peer connection detected, stopping DNS discovery for %s\n", dnsAddress)
+			return false
+		}
+
 		records, err := queryDNSRecords(dnsAddress)
 		if err != nil {
 			fmt.Printf("[DNS] Failed to query %s: %v\n", dnsAddress, err)
-			return
+			return true
 		}
 
 		if len(records) == 0 {
 			fmt.Printf("[DNS] No records found for %s\n", dnsAddress)
-			return
+			return true
 		}
 
 		// Parse the first TXT record as multiaddr
@@ -87,19 +97,19 @@ func startDNSCheckLoop(ctx context.Context, node host.Host, dnsAddress string, p
 		addr, err := multiaddr.NewMultiaddr(multiAddrStr)
 		if err != nil {
 			fmt.Printf("[DNS] Failed to parse multiaddr %s: %v\n", multiAddrStr, err)
-			return
+			return true
 		}
 
 		peer, err := peerstore.AddrInfoFromP2pAddr(addr)
 		if err != nil {
 			fmt.Printf("[DNS] Failed to convert to peer address: %v\n", err)
-			return
+			return true
 		}
 
 		// Check if the peer is ourselves
 		if peer.ID == node.ID() {
 			fmt.Printf("[DNS] Discovered address is ourselves, skipping\n")
-			return
+			return true
 		}
 
 		fmt.Printf("[DNS] Discovered peer: %s\n", addr)
@@ -107,15 +117,18 @@ func startDNSCheckLoop(ctx context.Context, node host.Host, dnsAddress string, p
 		// Try to connect
 		if err := node.Connect(ctx, *peer); err != nil {
 			fmt.Printf("[DNS] Failed to connect to %s: %v\n", addr, err)
-			return
+			return true
 		}
 
 		fmt.Printf("[DNS] Connected to peer: %s\n", addr)
 		peerTracker.Add(multiAddrStr, *peer)
+		return false
 	}
 
 	// Initial check
-	checkDNS()
+	if !checkDNS() {
+		return
+	}
 
 	// Periodic checks
 	for {
@@ -123,7 +136,9 @@ func startDNSCheckLoop(ctx context.Context, node host.Host, dnsAddress string, p
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			checkDNS()
+			if !checkDNS() {
+				return
+			}
 		}
 	}
 }
@@ -160,6 +175,55 @@ func main() {
 	// Print version info
 	fmt.Printf("[APP] P2POS version: %s\n", update.Version)
 
+	if err := database.Init(); err != nil {
+		panic(err)
+	}
+
+	storedPrivKey, err := database.LoadNodePrivateKey()
+	if err != nil {
+		panic(err)
+	}
+
+	var nodePrivKey crypto.PrivKey
+	generateAndPersistNodeKey := func() crypto.PrivKey {
+		generatedKey, _, err := crypto.GenerateEd25519Key(nil)
+		if err != nil {
+			panic(err)
+		}
+
+		privKeyBytes, err := crypto.MarshalPrivateKey(generatedKey)
+		if err != nil {
+			panic(err)
+		}
+
+		encodedPrivKey := base64.StdEncoding.EncodeToString(privKeyBytes)
+		if err := database.SaveNodePrivateKey(encodedPrivKey); err != nil {
+			panic(err)
+		}
+
+		fmt.Println("[NODE] Generated and persisted new node private key")
+		return generatedKey
+	}
+
+	if storedPrivKey == "" {
+		nodePrivKey = generateAndPersistNodeKey()
+	} else {
+		privKeyBytes, err := base64.StdEncoding.DecodeString(storedPrivKey)
+		if err != nil {
+			fmt.Printf("[NODE] Stored private key is invalid base64, regenerating: %v\n", err)
+			nodePrivKey = generateAndPersistNodeKey()
+		} else {
+			loadedKey, err := crypto.UnmarshalPrivateKey(privKeyBytes)
+			if err != nil {
+				fmt.Printf("[NODE] Stored private key is invalid, regenerating: %v\n", err)
+				nodePrivKey = generateAndPersistNodeKey()
+			} else {
+				nodePrivKey = loadedKey
+				fmt.Println("[NODE] Loaded persisted node private key")
+			}
+		}
+	}
+
 	// Start auto-update checker (check every 6 hours)
 	fmt.Println("[APP] Starting auto-update checker...")
 	update.StartUpdateChecker("ZhongWwwHhh", "Ops-System", 5*time.Minute)
@@ -182,6 +246,7 @@ func main() {
 			"/ip4/0.0.0.0/tcp/4100",
 			"/ip6/::/tcp/4100",
 		),
+		libp2p.Identity(nodePrivKey),
 		libp2p.Ping(true),
 	)
 	if err != nil {

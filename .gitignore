@@ -8,3 +8,4 @@ init_config.json
 init_config.json.used
 /p2pos
 /*.exe
+/test
