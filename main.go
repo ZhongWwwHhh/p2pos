@@ -226,7 +226,7 @@ func main() {
 
 	// Start auto-update checker (check every 6 hours)
 	fmt.Println("[APP] Starting auto-update checker...")
-	update.StartUpdateChecker("ZhongWwwHhh", "Ops-System", 5*time.Minute)
+	update.StartUpdateChecker("ZhongWwwHhh", "Ops-System", 3*time.Minute)
 
 	// Load configuration
 	configPath := "config.json"

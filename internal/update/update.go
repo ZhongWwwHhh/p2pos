@@ -95,9 +95,57 @@ func DownloadBinary(url, targetPath string) error {
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		os.Remove(tmpFile)
-		return fmt.Errorf("failed to write binary: %w", err)
+	totalSize := resp.ContentLength
+	var downloaded int64
+	nextPercent := int64(5)
+	nextUnknownLogBytes := int64(5 * 1024 * 1024) // 5 MiB
+	startTime := time.Now()
+	buf := make([]byte, 32*1024)
+
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, err := f.Write(buf[:n]); err != nil {
+				os.Remove(tmpFile)
+				return fmt.Errorf("failed to write binary: %w", err)
+			}
+			downloaded += int64(n)
+
+			elapsed := time.Since(startTime).Seconds()
+			if elapsed <= 0 {
+				elapsed = 0.001
+			}
+			speedMBps := float64(downloaded) / 1024.0 / 1024.0 / elapsed
+
+			if totalSize > 0 {
+				percent := downloaded * 100 / totalSize
+				for percent >= nextPercent && nextPercent <= 100 {
+					fmt.Printf(
+						"[UPDATE] Download progress: %d%% (%0.2f/%0.2f MiB) speed: %0.2f MiB/s\n",
+						nextPercent,
+						float64(downloaded)/1024.0/1024.0,
+						float64(totalSize)/1024.0/1024.0,
+						speedMBps,
+					)
+					nextPercent += 5
+				}
+			} else if downloaded >= nextUnknownLogBytes {
+				fmt.Printf(
+					"[UPDATE] Downloaded: %0.2f MiB speed: %0.2f MiB/s\n",
+					float64(downloaded)/1024.0/1024.0,
+					speedMBps,
+				)
+				nextUnknownLogBytes += 5 * 1024 * 1024
+			}
+		}
+
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			os.Remove(tmpFile)
+			return fmt.Errorf("failed to read download stream: %w", readErr)
+		}
 	}
 
 	// Make executable on Unix-like systems
