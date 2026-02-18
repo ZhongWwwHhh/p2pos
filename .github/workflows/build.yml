@@ -11,7 +11,21 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Generate version
+        id: version
+        run: |
+          VERSION=$(date +'%Y%m%d-%H%M')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+
   build:
+    needs: version
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -32,15 +46,9 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Generate version
-        id: version
-        run: |
-          VERSION=$(date +'%Y%m%d-%H%M')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Build for ${{ matrix.goos }}
         run: |
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X p2pos/internal/update.Version=${{ steps.version.outputs.version }}" -o ${{ matrix.output_name }} main.go
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X p2pos/internal/update.Version=${{ needs.version.outputs.version }}" -o ${{ matrix.output_name }} main.go
         shell: bash
 
       - name: Upload artifact
@@ -50,7 +58,7 @@ jobs:
           path: ${{ matrix.output_name }}
 
   release:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-24.04
 
     steps:
@@ -60,13 +68,6 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
 
-      - name: Generate version
-        id: version
-        run: |
-          VERSION=$(date +'%Y%m%d-%H%M')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
-
       - name: List downloaded files
         run: find . -type f -name "p2pos*" | head -20
 
@@ -75,14 +76,14 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag ${{ steps.version.outputs.tag }} || true
-          git push origin ${{ steps.version.outputs.tag }} || true
+          git tag ${{ needs.version.outputs.tag }} || true
+          git push origin ${{ needs.version.outputs.tag }} || true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Release ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Release ${{ needs.version.outputs.version }}
           files: |
             p2pos-win.exe/p2pos-win.exe
             p2pos-linux/p2pos-linux
