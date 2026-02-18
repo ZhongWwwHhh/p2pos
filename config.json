@@ -4,5 +4,9 @@
       "type": "dns",
       "address": "init.p2pos.zhongwwwhhh.cc"
     }
+  ],
+  "listen": [
+    "0.0.0.0:4100",
+    "[::]:4100"
   ]
 }
