@@ -8,13 +8,15 @@ import (
 
 	"p2pos/internal/config"
 	"p2pos/internal/database"
+	"p2pos/internal/events"
 	"p2pos/internal/network"
+	"p2pos/internal/presence"
 	"p2pos/internal/scheduler"
 	"p2pos/internal/tasks"
 	"p2pos/internal/update"
 )
 
-func Run(args []string) error {
+func Run(_ []string) error {
 	fmt.Printf("[APP] P2POS version: %s\n", update.Version)
 
 	if err := database.Init(); err != nil {
@@ -26,18 +28,14 @@ func Run(args []string) error {
 		return err
 	}
 
-	configPath := "config.json"
-	if len(args) > 0 {
-		configPath = args[0]
+	eventBus := events.NewBus()
+	configStore := config.NewStore(eventBus)
+	if err := configStore.Init(); err != nil {
+		return err
 	}
+	cfg := configStore.Get()
 
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		fmt.Printf("Warning: Could not load config file: %v\n", err)
-		cfg = &config.Config{}
-	}
-
-	netNode, err := network.NewNode(cfg.Listen.Values(), nodePrivKey)
+	netNode, err := network.NewNode(configStore, nodePrivKey, eventBus)
 	if err != nil {
 		return err
 	}
@@ -50,6 +48,9 @@ func Run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	peerPresence := presence.NewService(eventBus, database.NewPeerRepository())
+	peerPresence.Start(ctx)
+
 	jobScheduler := scheduler.New()
 
 	fmt.Println("[APP] Starting auto-update checker...")
@@ -57,12 +58,17 @@ func Run(args []string) error {
 		return err
 	}
 
+	connectionSpecs := make([]network.ConnectionSpec, 0, len(cfg.InitConnections))
 	for _, conn := range cfg.InitConnections {
-		if conn.Type == "dns" {
-			if err := jobScheduler.Register(tasks.NewDNSBootstrapTask(netNode.Host, conn.Address, netNode.Tracker)); err != nil {
-				return err
-			}
-		}
+		connectionSpecs = append(connectionSpecs, network.ConnectionSpec{
+			Type:    conn.Type,
+			Address: conn.Address,
+		})
+	}
+
+	resolver := network.NewConfigResolver(netNode.Host.ID(), connectionSpecs, network.NewNetDNSResolver())
+	if err := jobScheduler.Register(tasks.NewBootstrapTask(netNode, resolver)); err != nil {
+		return err
 	}
 
 	if err := jobScheduler.Register(tasks.NewPingTask(netNode.Tracker, netNode.PingService)); err != nil {

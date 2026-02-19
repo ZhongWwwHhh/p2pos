@@ -1,9 +1,11 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -25,8 +27,10 @@ type Setting struct {
 
 // Peer 对等节点信息
 type Peer struct {
-	ID    uint   `gorm:"primaryKey"`
-	Addrs string // JSON 格式的地址列表
+	ID         uint      `gorm:"primaryKey"`
+	PeerID     string    `gorm:"uniqueIndex;not null"`
+	Addrs      string    // 当前连接地址
+	LastSeenAt time.Time `gorm:"index"`
 }
 
 // Init 初始化数据库连接
@@ -144,4 +148,28 @@ func SaveNodeSetting(ns *NodeSetting) error {
 type NodeSetting struct {
 	Version  string
 	NodePriv string
+}
+
+type PeerRepository struct{}
+
+func NewPeerRepository() *PeerRepository {
+	return &PeerRepository{}
+}
+
+func (r *PeerRepository) UpsertLastSeen(_ context.Context, peerID, remoteAddr string) error {
+	peer := Peer{
+		PeerID:     peerID,
+		Addrs:      remoteAddr,
+		LastSeenAt: time.Now(),
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "peer_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"addrs":        peer.Addrs,
+				"last_seen_at": peer.LastSeenAt,
+			}),
+		}).Create(&peer).Error
+	})
 }

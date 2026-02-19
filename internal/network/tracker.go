@@ -8,19 +8,25 @@ import (
 
 type Tracker struct {
 	mu    sync.RWMutex
-	peers map[string]peerstore.AddrInfo
+	peers map[peerstore.ID]peerstore.AddrInfo
 }
 
 func NewTracker() *Tracker {
 	return &Tracker{
-		peers: make(map[string]peerstore.AddrInfo),
+		peers: make(map[peerstore.ID]peerstore.AddrInfo),
 	}
 }
 
-func (t *Tracker) Add(addr string, p peerstore.AddrInfo) {
+func (t *Tracker) Upsert(p peerstore.AddrInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.peers[addr] = p
+	t.peers[p.ID] = p
+}
+
+func (t *Tracker) Remove(peerID peerstore.ID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.peers, peerID)
 }
 
 func (t *Tracker) GetAll() []peerstore.AddrInfo {

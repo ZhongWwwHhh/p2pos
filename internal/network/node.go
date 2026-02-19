@@ -1,25 +1,36 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
+	"time"
+
+	"p2pos/internal/events"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	libp2pnet "github.com/libp2p/go-libp2p/core/network"
 	peerstore "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
+	multiaddr "github.com/multiformats/go-multiaddr"
 )
 
 type Node struct {
 	Host        host.Host
 	PingService *ping.PingService
 	Tracker     *Tracker
+	bus         *events.Bus
 }
 
-func NewNode(listens []string, privKey crypto.PrivKey) (*Node, error) {
-	listenAddrs, err := buildListenMultiaddrs(listens)
+type ListenProvider interface {
+	ListenAddresses() []string
+}
+
+func NewNode(cfg ListenProvider, privKey crypto.PrivKey, bus *events.Bus) (*Node, error) {
+	listenAddrs, err := buildListenMultiaddrs(cfg.ListenAddresses())
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +48,9 @@ func NewNode(listens []string, privKey crypto.PrivKey) (*Node, error) {
 		Host:        hostNode,
 		PingService: &ping.PingService{Host: hostNode},
 		Tracker:     NewTracker(),
+		bus:         bus,
 	}
+	n.registerConnectionNotifications()
 	return n, nil
 }
 
@@ -58,6 +71,44 @@ func (n *Node) LogLocalAddrs() error {
 
 	fmt.Println("[NODE] Local peer address:", addrs)
 	return nil
+}
+
+func (n *Node) Connect(ctx context.Context, peerInfo peerstore.AddrInfo) error {
+	return n.Host.Connect(ctx, peerInfo)
+}
+
+func (n *Node) registerConnectionNotifications() {
+	n.Host.Network().Notify(&libp2pnet.NotifyBundle{
+		ConnectedF: func(_ libp2pnet.Network, conn libp2pnet.Conn) {
+			n.Tracker.Upsert(remoteAddrInfo(conn.RemotePeer(), conn.RemoteMultiaddr()))
+			if n.bus != nil {
+				n.bus.Publish(events.PeerConnected{
+					PeerID:     conn.RemotePeer().String(),
+					RemoteAddr: conn.RemoteMultiaddr().String(),
+					At:         time.Now(),
+				})
+			}
+		},
+		DisconnectedF: func(network libp2pnet.Network, conn libp2pnet.Conn) {
+			if len(network.ConnsToPeer(conn.RemotePeer())) == 0 {
+				n.Tracker.Remove(conn.RemotePeer())
+			}
+			if n.bus != nil {
+				n.bus.Publish(events.PeerDisconnected{
+					PeerID:     conn.RemotePeer().String(),
+					RemoteAddr: conn.RemoteMultiaddr().String(),
+					At:         time.Now(),
+				})
+			}
+		},
+	})
+}
+
+func remoteAddrInfo(peerID peerstore.ID, addr multiaddr.Multiaddr) peerstore.AddrInfo {
+	return peerstore.AddrInfo{
+		ID:    peerID,
+		Addrs: []multiaddr.Multiaddr{addr},
+	}
 }
 
 func buildListenMultiaddrs(listens []string) ([]string, error) {
