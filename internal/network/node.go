@@ -77,6 +77,62 @@ func (n *Node) Connect(ctx context.Context, peerInfo peerstore.AddrInfo) error {
 	return n.Host.Connect(ctx, peerInfo)
 }
 
+func (n *Node) StartBootstrap(ctx context.Context, resolver Resolver, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+
+	run := func() bool {
+		if len(n.Host.Network().Peers()) > 0 {
+			fmt.Println("[BOOTSTRAP] Existing peer connection detected, stopping bootstrap discovery")
+			return false
+		}
+
+		candidates, err := resolver.Resolve(ctx)
+		if err != nil {
+			fmt.Printf("[BOOTSTRAP] Resolver warning: %v\n", err)
+		}
+		if len(candidates) == 0 {
+			fmt.Println("[BOOTSTRAP] No candidates resolved")
+			return true
+		}
+
+		for _, candidate := range candidates {
+			if candidate.ID == n.Host.ID() {
+				continue
+			}
+			if err := n.Connect(ctx, candidate); err != nil {
+				fmt.Printf("[BOOTSTRAP] Failed to connect to %s: %v\n", candidate.ID.String(), err)
+				continue
+			}
+			fmt.Printf("[BOOTSTRAP] Connected to bootstrap peer: %s\n", candidate.ID.String())
+			return false
+		}
+
+		return true
+	}
+
+	go func() {
+		if !run() {
+			return
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !run() {
+					return
+				}
+			}
+		}
+	}()
+}
+
 func (n *Node) registerConnectionNotifications() {
 	n.Host.Network().Notify(&libp2pnet.NotifyBundle{
 		ConnectedF: func(_ libp2pnet.Network, conn libp2pnet.Conn) {

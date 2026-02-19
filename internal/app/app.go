@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"p2pos/internal/config"
 	"p2pos/internal/database"
@@ -67,9 +68,7 @@ func Run(_ []string) error {
 	}
 
 	resolver := network.NewConfigResolver(netNode.Host.ID(), connectionSpecs, network.NewNetDNSResolver())
-	if err := jobScheduler.Register(tasks.NewBootstrapTask(netNode, resolver)); err != nil {
-		return err
-	}
+	netNode.StartBootstrap(ctx, resolver, time.Minute)
 
 	if err := jobScheduler.Register(tasks.NewPingTask(netNode.Tracker, netNode.PingService)); err != nil {
 		return err
