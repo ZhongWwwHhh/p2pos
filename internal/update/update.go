@@ -16,14 +16,97 @@ import (
 )
 
 type Service struct {
-	feedURL string
-	mu      sync.Mutex
+	configProvider FeedURLProvider
+	restarter      Restarter
+	mu             sync.Mutex
 }
 
-func NewService(feedURL string) *Service {
+type FeedURLProvider interface {
+	UpdateFeedURL() (string, error)
+}
+
+func NewService(configProvider FeedURLProvider) *Service {
 	return &Service{
-		feedURL: feedURL,
+		configProvider: configProvider,
+		restarter: NewChainRestarter(
+			NewSystemdRestarter("p2pos"),
+			&SpawnSelfRestarter{},
+		),
 	}
+}
+
+func NewServiceWithRestarter(configProvider FeedURLProvider, restarter Restarter) *Service {
+	if restarter == nil {
+		restarter = NewChainRestarter(
+			NewSystemdRestarter("p2pos"),
+			&SpawnSelfRestarter{},
+		)
+	}
+	return &Service{
+		configProvider: configProvider,
+		restarter:      restarter,
+	}
+}
+
+type Restarter interface {
+	Restart(ctx context.Context) error
+}
+
+type RestartStrategy interface {
+	Name() string
+	Restart(ctx context.Context) error
+}
+
+type ChainRestarter struct {
+	strategies []RestartStrategy
+}
+
+func NewChainRestarter(strategies ...RestartStrategy) *ChainRestarter {
+	return &ChainRestarter{strategies: strategies}
+}
+
+func (r *ChainRestarter) Restart(ctx context.Context) error {
+	var errs []error
+	for _, strategy := range r.strategies {
+		fmt.Printf("[UPDATE] Restart strategy: %s\n", strategy.Name())
+		if err := strategy.Restart(ctx); err != nil {
+			fmt.Printf("[UPDATE] Restart strategy %s failed: %v\n", strategy.Name(), err)
+			errs = append(errs, fmt.Errorf("%s: %w", strategy.Name(), err))
+			continue
+		}
+		fmt.Printf("[UPDATE] Restart strategy %s succeeded\n", strategy.Name())
+		return nil
+	}
+	return fmt.Errorf("all restart strategies failed: %w", errorsJoin(errs))
+}
+
+type SystemdRestarter struct {
+	serviceName string
+}
+
+func NewSystemdRestarter(serviceName string) *SystemdRestarter {
+	return &SystemdRestarter{serviceName: serviceName}
+}
+
+func (r *SystemdRestarter) Name() string {
+	return "systemd-restart"
+}
+
+func (r *SystemdRestarter) Restart(ctx context.Context) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("unsupported on %s", runtime.GOOS)
+	}
+	return exec.CommandContext(ctx, "systemctl", "restart", r.serviceName).Run()
+}
+
+type SpawnSelfRestarter struct{}
+
+func (r *SpawnSelfRestarter) Name() string {
+	return "spawn-self"
+}
+
+func (r *SpawnSelfRestarter) Restart(_ context.Context) error {
+	return RestartApplication()
 }
 
 // GithubRelease represents a GitHub release
@@ -177,10 +260,10 @@ func DownloadBinary(url, targetPath string) error {
 }
 
 // CheckAndUpdate checks for updates and applies them if available.
-func CheckAndUpdate(feedURL string) error {
+func CheckAndUpdate(feedURL string) (bool, error) {
 	latestVersion, downloadURL, err := GetLatestVersion(feedURL)
 	if err != nil {
-		return fmt.Errorf("failed to check for updates: %w", err)
+		return false, fmt.Errorf("failed to check for updates: %w", err)
 	}
 
 	// Remove 'v' prefix if present for comparison
@@ -189,7 +272,7 @@ func CheckAndUpdate(feedURL string) error {
 
 	if currentVer >= latestVer {
 		fmt.Printf("[UPDATE] Already at latest version: %s\n", config.AppVersion)
-		return nil
+		return false, nil
 	}
 
 	fmt.Printf("[UPDATE] New version available: %s (current: %s)\n", latestVersion, config.AppVersion)
@@ -198,45 +281,43 @@ func CheckAndUpdate(feedURL string) error {
 	// Get the path to the current executable
 	exePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
+		return false, fmt.Errorf("failed to get executable path: %w", err)
 	}
 
 	// Download the new binary
 	fmt.Println("[UPDATE] Downloading new version...")
 	if err := DownloadBinary(downloadURL, exePath); err != nil {
-		return fmt.Errorf("failed to update binary: %w", err)
+		return false, fmt.Errorf("failed to update binary: %w", err)
 	}
 
 	fmt.Printf("[UPDATE] Successfully updated to version %s\n", latestVersion)
-
-	// 如果运行在 Linux 并且使用 systemd 管理服务，优先尝试通过 systemctl 重启服务
-	if runtime.GOOS == "linux" {
-		fmt.Println("[UPDATE] Attempting to restart systemd service 'p2pos'...")
-		if err := exec.Command("systemctl", "restart", "p2pos").Run(); err == nil {
-			fmt.Println("[UPDATE] systemd restart succeeded, exiting for service to restart")
-			os.Exit(0)
-		} else {
-			fmt.Printf("[UPDATE] systemctl restart failed: %v\n", err)
-		}
-	}
-
-	// 回退：直接重启当前程序（Spawn 新进程并退出当前进程）
-	fmt.Println("[UPDATE] Restarting application directly...")
-	if err := RestartApplication(); err != nil {
-		fmt.Printf("[UPDATE] Failed to restart application: %v\n", err)
-	}
-
-	return nil
+	return true, nil
 }
 
-func (s *Service) RunOnce(_ context.Context) error {
+func (s *Service) RunOnce(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	feedURL, err := s.configProvider.UpdateFeedURL()
+	if err != nil {
+		return fmt.Errorf("load update feed url failed: %w", err)
+	}
+
 	fmt.Println("[UPDATE] Checking for updates...")
-	if err := CheckAndUpdate(s.feedURL); err != nil {
+	updated, err := CheckAndUpdate(feedURL)
+	if err != nil {
 		return fmt.Errorf("check failed: %w", err)
 	}
+	if !updated {
+		return nil
+	}
+
+	if err := s.restarter.Restart(ctx); err != nil {
+		return fmt.Errorf("updated but restart failed: %w", err)
+	}
+
+	// restart succeeded, exit current process to finish handover
+	os.Exit(0)
 
 	return nil
 }
@@ -257,6 +338,19 @@ func RestartApplication() error {
 		return fmt.Errorf("failed to restart application: %w", err)
 	}
 
-	os.Exit(0)
 	return nil
+}
+
+func errorsJoin(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	msg := ""
+	for i, err := range errs {
+		if i > 0 {
+			msg += "; "
+		}
+		msg += err.Error()
+	}
+	return fmt.Errorf("%s", msg)
 }

@@ -54,11 +54,7 @@ func Run(_ []string) error {
 	jobScheduler := scheduler.New()
 
 	fmt.Println("[APP] Starting auto-update checker...")
-	updateFeedURL, err := configStore.UpdateFeedURL()
-	if err != nil {
-		return err
-	}
-	updater := update.NewService(updateFeedURL)
+	updater := update.NewService(configStore)
 	if err := jobScheduler.Register(tasks.NewUpdateCheckTask(updater, 3*time.Minute)); err != nil {
 		return err
 	}
