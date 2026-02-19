@@ -28,7 +28,7 @@ echo "Output: $OUTPUT"
 
 # Build with version injection via ldflags
 go build \
-    -ldflags "-X p2pos/internal/update.Version=$VERSION" \
+    -ldflags "-X p2pos/internal/config.AppVersion=$VERSION" \
     -o "$OUTPUT" \
     main.go
 

@@ -1,18 +1,30 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"p2pos/internal/config"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
-var Version string = "dev"
+type Service struct {
+	feedURL string
+	mu      sync.Mutex
+}
+
+func NewService(feedURL string) *Service {
+	return &Service{
+		feedURL: feedURL,
+	}
+}
 
 // GithubRelease represents a GitHub release
 type GithubRelease struct {
@@ -23,18 +35,16 @@ type GithubRelease struct {
 	} `json:"assets"`
 }
 
-// GetLatestVersion fetches the latest release version from GitHub
-func GetLatestVersion(owner, repo string) (string, string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
-
-	resp, err := http.Get(url)
+// GetLatestVersion fetches latest release metadata from configured feed URL.
+func GetLatestVersion(feedURL string) (string, string, error) {
+	resp, err := http.Get(feedURL)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch GitHub release: %w", err)
+		return "", "", fmt.Errorf("failed to fetch release feed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+		return "", "", fmt.Errorf("release feed returned status %d", resp.StatusCode)
 	}
 
 	var release GithubRelease
@@ -166,23 +176,23 @@ func DownloadBinary(url, targetPath string) error {
 	return nil
 }
 
-// CheckAndUpdate checks for updates and applies them if available
-func CheckAndUpdate(owner, repo string) error {
-	latestVersion, downloadURL, err := GetLatestVersion(owner, repo)
+// CheckAndUpdate checks for updates and applies them if available.
+func CheckAndUpdate(feedURL string) error {
+	latestVersion, downloadURL, err := GetLatestVersion(feedURL)
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %w", err)
 	}
 
 	// Remove 'v' prefix if present for comparison
-	currentVer := strings.TrimPrefix(Version, "v")
+	currentVer := strings.TrimPrefix(config.AppVersion, "v")
 	latestVer := strings.TrimPrefix(latestVersion, "v")
 
 	if currentVer >= latestVer {
-		fmt.Printf("[UPDATE] Already at latest version: %s\n", Version)
+		fmt.Printf("[UPDATE] Already at latest version: %s\n", config.AppVersion)
 		return nil
 	}
 
-	fmt.Printf("[UPDATE] New version available: %s (current: %s)\n", latestVersion, Version)
+	fmt.Printf("[UPDATE] New version available: %s (current: %s)\n", latestVersion, config.AppVersion)
 	fmt.Printf("[UPDATE] Downloading from: %s\n", downloadURL)
 
 	// Get the path to the current executable
@@ -219,19 +229,16 @@ func CheckAndUpdate(owner, repo string) error {
 	return nil
 }
 
-// StartUpdateChecker starts a background goroutine that checks for updates periodically
-func StartUpdateChecker(owner, repo string, interval time.Duration) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+func (s *Service) RunOnce(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-		for range ticker.C {
-			fmt.Println("[UPDATE] Checking for updates...")
-			if err := CheckAndUpdate(owner, repo); err != nil {
-				fmt.Printf("[UPDATE] Check failed: %v\n", err)
-			}
-		}
-	}()
+	fmt.Println("[UPDATE] Checking for updates...")
+	if err := CheckAndUpdate(s.feedURL); err != nil {
+		return fmt.Errorf("check failed: %w", err)
+	}
+
+	return nil
 }
 
 // RestartApplication restarts the current application

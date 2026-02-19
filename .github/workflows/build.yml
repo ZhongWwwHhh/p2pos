@@ -48,7 +48,7 @@ jobs:
 
       - name: Build for ${{ matrix.goos }}
         run: |
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X p2pos/internal/update.Version=${{ needs.version.outputs.version }}" -o ${{ matrix.output_name }} main.go
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X p2pos/internal/config.AppVersion=${{ needs.version.outputs.version }}" -o ${{ matrix.output_name }} main.go
         shell: bash
 
       - name: Upload artifact

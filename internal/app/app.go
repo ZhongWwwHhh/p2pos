@@ -18,7 +18,7 @@ import (
 )
 
 func Run(_ []string) error {
-	fmt.Printf("[APP] P2POS version: %s\n", update.Version)
+	fmt.Printf("[APP] P2POS version: %s\n", config.AppVersion)
 
 	if err := database.Init(); err != nil {
 		return err
@@ -55,7 +55,12 @@ func Run(_ []string) error {
 	jobScheduler := scheduler.New()
 
 	fmt.Println("[APP] Starting auto-update checker...")
-	if err := jobScheduler.Register(tasks.NewUpdateCheckTask("ZhongWwwHhh", "Ops-System")); err != nil {
+	updateFeedURL, err := configStore.UpdateFeedURL()
+	if err != nil {
+		return err
+	}
+	updater := update.NewService(updateFeedURL)
+	if err := jobScheduler.Register(tasks.NewUpdateCheckTask(updater, 3*time.Minute)); err != nil {
 		return err
 	}
 

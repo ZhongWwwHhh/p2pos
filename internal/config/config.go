@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 type Config struct {
 	InitConnections []Connection `json:"init_connections"`
 	Listen          ListenConfig `json:"listen"`
+	UpdateFeedURL   string       `json:"update_feed_url"`
 }
 
 type Connection struct {
@@ -54,6 +57,7 @@ type Store struct {
 }
 
 const defaultConfigPath = "config.json"
+const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
 
 func NewStore(bus *events.Bus) *Store {
 	return &Store{
@@ -65,7 +69,8 @@ func NewStore(bus *events.Bus) *Store {
 
 func Default() Config {
 	return Config{
-		Listen: ListenConfig{"0.0.0.0:4100", "[::]:4100"},
+		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
+		UpdateFeedURL: defaultUpdateFeedURL,
 	}
 }
 
@@ -119,6 +124,7 @@ func (s *Store) Update(next Config) error {
 		s.bus.Publish(events.ConfigChanged{
 			Listen:          append([]string(nil), normalized.Listen.Values()...),
 			InitConnections: toEventConnections(normalized.InitConnections),
+			UpdateFeedURL:   normalized.UpdateFeedURL,
 			At:              time.Now(),
 		})
 	}
@@ -153,6 +159,9 @@ func normalize(cfg Config) Config {
 	if len(cfg.Listen) == 0 {
 		cfg.Listen = Default().Listen
 	}
+	if strings.TrimSpace(cfg.UpdateFeedURL) == "" {
+		cfg.UpdateFeedURL = defaultUpdateFeedURL
+	}
 	return cfg
 }
 
@@ -160,9 +169,26 @@ func copyConfig(cfg Config) Config {
 	next := Config{
 		InitConnections: make([]Connection, len(cfg.InitConnections)),
 		Listen:          append(ListenConfig(nil), cfg.Listen...),
+		UpdateFeedURL:   cfg.UpdateFeedURL,
 	}
 	copy(next.InitConnections, cfg.InitConnections)
 	return next
+}
+
+func (s *Store) UpdateFeedURL() (string, error) {
+	s.mu.RLock()
+	raw := s.cfg.UpdateFeedURL
+	s.mu.RUnlock()
+	return validateFeedURL(raw)
+}
+
+func validateFeedURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid update_feed_url %q, expected full URL", raw)
+	}
+	return value, nil
 }
 
 func toEventConnections(conns []Connection) []events.ConfigConnection {
