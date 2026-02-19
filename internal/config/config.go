@@ -125,7 +125,7 @@ func (s *Store) Update(next Config) error {
 			Listen:          append([]string(nil), normalized.Listen.Values()...),
 			InitConnections: toEventConnections(normalized.InitConnections),
 			UpdateFeedURL:   normalized.UpdateFeedURL,
-			At:              time.Now(),
+			At:              time.Now().UTC(),
 		})
 	}
 

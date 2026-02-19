@@ -192,7 +192,7 @@ func DownloadBinary(url, targetPath string) error {
 	var downloaded int64
 	nextPercent := int64(5)
 	nextUnknownLogBytes := int64(5 * 1024 * 1024) // 5 MiB
-	startTime := time.Now()
+	startTime := time.Now().UTC()
 	buf := make([]byte, 32*1024)
 
 	for {

@@ -6,7 +6,7 @@
 set -e
 
 # Get version from current date/time in yyyymmdd-hhmm format
-VERSION=$(date +%Y%m%d-%H%M)
+VERSION=$(date -u +%Y%m%d-%H%M)
 
 # Output file name
 OUTPUT="${1:-p2pos}"

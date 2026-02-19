@@ -134,7 +134,7 @@ func migratePeerSchema(db *gorm.DB) error {
 		sourceAddrExpr = "COALESCE(addrs, '')"
 	}
 
-	sourceLastSeenExpr := "CURRENT_TIMESTAMP"
+	sourceLastSeenExpr := "CURRENT_TIMESTAMP" // SQLite CURRENT_TIMESTAMP is UTC.
 	if hasLastSeenAt {
 		sourceLastSeenExpr = "last_seen_at"
 	}
@@ -272,7 +272,7 @@ func (r *PeerRepository) UpsertLastSeen(_ context.Context, peerID, remoteAddr st
 	peer := Peer{
 		PeerID:         peerID,
 		LastRemoteAddr: remoteAddr,
-		LastSeenAt:     time.Now(),
+		LastSeenAt:     time.Now().UTC(),
 	}
 
 	return DB.Transaction(func(tx *gorm.DB) error {

@@ -141,7 +141,7 @@ func (n *Node) registerConnectionNotifications() {
 				n.bus.Publish(events.PeerConnected{
 					PeerID:     conn.RemotePeer().String(),
 					RemoteAddr: conn.RemoteMultiaddr().String(),
-					At:         time.Now(),
+					At:         time.Now().UTC(),
 				})
 			}
 		},
@@ -153,7 +153,7 @@ func (n *Node) registerConnectionNotifications() {
 				n.bus.Publish(events.PeerDisconnected{
 					PeerID:     conn.RemotePeer().String(),
 					RemoteAddr: conn.RemoteMultiaddr().String(),
-					At:         time.Now(),
+					At:         time.Now().UTC(),
 				})
 			}
 		},
