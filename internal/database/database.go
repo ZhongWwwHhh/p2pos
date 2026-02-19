@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,10 +28,14 @@ type Setting struct {
 
 // Peer 对等节点信息
 type Peer struct {
-	ID         uint      `gorm:"primaryKey"`
-	PeerID     string    `gorm:"uniqueIndex;not null"`
-	Addrs      string    // 当前连接地址
-	LastSeenAt time.Time `gorm:"index"`
+	PeerID         string    `gorm:"primaryKey;not null"`
+	LastRemoteAddr string    // 最近一次看到的远端连接地址
+	LastSeenAt     time.Time `gorm:"index"`
+}
+
+type sqliteTableColumn struct {
+	Name string `gorm:"column:name"`
+	PK   int    `gorm:"column:pk"`
 }
 
 // Init 初始化数据库连接
@@ -56,12 +61,119 @@ func Init() error {
 		return err
 	}
 
+	if err := migratePeerSchema(DB); err != nil {
+		return err
+	}
+
 	// 初始化默认设置
 	if err := initDefaultSettings(); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func migratePeerSchema(db *gorm.DB) error {
+	var columns []sqliteTableColumn
+	if err := db.Raw("PRAGMA table_info(peers)").Scan(&columns).Error; err != nil {
+		return err
+	}
+
+	if len(columns) == 0 {
+		return nil
+	}
+
+	hasID := false
+	hasAddrs := false
+	hasLastRemoteAddr := false
+	hasLastSeenAt := false
+	peerIDIsPrimary := false
+	for _, col := range columns {
+		switch col.Name {
+		case "id":
+			hasID = true
+		case "addrs":
+			hasAddrs = true
+		case "last_remote_addr":
+			hasLastRemoteAddr = true
+		case "last_seen_at":
+			hasLastSeenAt = true
+		case "peer_id":
+			if col.PK == 1 {
+				peerIDIsPrimary = true
+			}
+		}
+	}
+
+	needsRebuild := hasID || !peerIDIsPrimary
+	if !needsRebuild {
+		if hasAddrs && hasLastRemoteAddr {
+			if err := db.Exec(`
+				UPDATE peers
+				SET last_remote_addr = addrs
+				WHERE (last_remote_addr IS NULL OR last_remote_addr = '')
+				  AND addrs IS NOT NULL
+				  AND addrs <> ''
+			`).Error; err != nil {
+				return err
+			}
+			if err := db.Migrator().DropColumn(&Peer{}, "addrs"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	sourceAddrExpr := "''"
+	switch {
+	case hasLastRemoteAddr && hasAddrs:
+		sourceAddrExpr = "CASE WHEN COALESCE(last_remote_addr, '') <> '' THEN last_remote_addr WHEN COALESCE(addrs, '') <> '' THEN addrs ELSE '' END"
+	case hasLastRemoteAddr:
+		sourceAddrExpr = "COALESCE(last_remote_addr, '')"
+	case hasAddrs:
+		sourceAddrExpr = "COALESCE(addrs, '')"
+	}
+
+	sourceLastSeenExpr := "CURRENT_TIMESTAMP"
+	if hasLastSeenAt {
+		sourceLastSeenExpr = "last_seen_at"
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`
+			CREATE TABLE peers_new (
+				peer_id TEXT PRIMARY KEY NOT NULL,
+				last_remote_addr TEXT,
+				last_seen_at DATETIME
+			)
+		`).Error; err != nil {
+			return err
+		}
+
+		copySQL := fmt.Sprintf(`
+			INSERT INTO peers_new (peer_id, last_remote_addr, last_seen_at)
+			SELECT peer_id, %s, %s
+			FROM peers
+			WHERE COALESCE(peer_id, '') <> ''
+			ON CONFLICT(peer_id) DO UPDATE SET
+				last_remote_addr = excluded.last_remote_addr,
+				last_seen_at = excluded.last_seen_at
+		`, sourceAddrExpr, sourceLastSeenExpr)
+		if err := tx.Exec(copySQL).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Exec(`DROP TABLE peers`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`ALTER TABLE peers_new RENAME TO peers`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_peers_last_seen_at ON peers(last_seen_at)`).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // initDefaultSettings 初始化默认设置值
@@ -158,17 +270,17 @@ func NewPeerRepository() *PeerRepository {
 
 func (r *PeerRepository) UpsertLastSeen(_ context.Context, peerID, remoteAddr string) error {
 	peer := Peer{
-		PeerID:     peerID,
-		Addrs:      remoteAddr,
-		LastSeenAt: time.Now(),
+		PeerID:         peerID,
+		LastRemoteAddr: remoteAddr,
+		LastSeenAt:     time.Now(),
 	}
 
 	return DB.Transaction(func(tx *gorm.DB) error {
 		return tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "peer_id"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
-				"addrs":        peer.Addrs,
-				"last_seen_at": peer.LastSeenAt,
+				"last_remote_addr": peer.LastRemoteAddr,
+				"last_seen_at":     peer.LastSeenAt,
 			}),
 		}).Create(&peer).Error
 	})

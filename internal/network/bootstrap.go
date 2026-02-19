@@ -5,30 +5,31 @@ import (
 	"errors"
 	"fmt"
 
+	"p2pos/internal/config"
+
 	peerstore "github.com/libp2p/go-libp2p/core/peer"
 	multiaddr "github.com/multiformats/go-multiaddr"
 )
-
-type ConnectionSpec struct {
-	Type    string
-	Address string
-}
 
 type Resolver interface {
 	Resolve(ctx context.Context) ([]peerstore.AddrInfo, error)
 }
 
-type ConfigResolver struct {
-	selfID      peerstore.ID
-	connections []ConnectionSpec
-	dns         DNSResolver
+type InitConnectionsProvider interface {
+	Get() config.Config
 }
 
-func NewConfigResolver(selfID peerstore.ID, connections []ConnectionSpec, dns DNSResolver) *ConfigResolver {
+type ConfigResolver struct {
+	selfID   peerstore.ID
+	provider InitConnectionsProvider
+	dns      DNSResolver
+}
+
+func NewConfigResolver(selfID peerstore.ID, provider InitConnectionsProvider, dns DNSResolver) *ConfigResolver {
 	return &ConfigResolver{
-		selfID:      selfID,
-		connections: connections,
-		dns:         dns,
+		selfID:   selfID,
+		provider: provider,
+		dns:      dns,
 	}
 }
 
@@ -37,7 +38,8 @@ func (r *ConfigResolver) Resolve(_ context.Context) ([]peerstore.AddrInfo, error
 	seen := make(map[peerstore.ID]struct{})
 	var errs []error
 
-	for _, conn := range r.connections {
+	cfg := r.provider.Get()
+	for _, conn := range cfg.InitConnections {
 		switch conn.Type {
 		case "dns":
 			records, err := r.dns.LookupTXT(conn.Address)

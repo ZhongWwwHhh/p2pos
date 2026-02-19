@@ -34,7 +34,6 @@ func Run(_ []string) error {
 	if err := configStore.Init(); err != nil {
 		return err
 	}
-	cfg := configStore.Get()
 
 	netNode, err := network.NewNode(configStore, nodePrivKey, eventBus)
 	if err != nil {
@@ -64,15 +63,7 @@ func Run(_ []string) error {
 		return err
 	}
 
-	connectionSpecs := make([]network.ConnectionSpec, 0, len(cfg.InitConnections))
-	for _, conn := range cfg.InitConnections {
-		connectionSpecs = append(connectionSpecs, network.ConnectionSpec{
-			Type:    conn.Type,
-			Address: conn.Address,
-		})
-	}
-
-	resolver := network.NewConfigResolver(netNode.Host.ID(), connectionSpecs, network.NewNetDNSResolver())
+	resolver := network.NewConfigResolver(netNode.Host.ID(), configStore, network.NewNetDNSResolver())
 	netNode.StartBootstrap(ctx, resolver, time.Minute)
 
 	if err := jobScheduler.Register(tasks.NewPingTask(netNode.Tracker, netNode.PingService)); err != nil {
