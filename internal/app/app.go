@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -45,8 +46,40 @@ func Run(_ []string) error {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	shutdownNotifier := NewBusShutdownRequester(eventBus)
+
+	shutdownEvents, unsubscribeShutdownEvents := eventBus.Subscribe(64)
+	defer unsubscribeShutdownEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case sig := <-sigChan:
+				shutdownNotifier.RequestShutdown(fmt.Sprintf("signal:%s", sig.String()))
+			case evt, ok := <-shutdownEvents:
+				if !ok {
+					return
+				}
+				shutdown, ok := evt.(events.ShutdownRequested)
+				if !ok {
+					continue
+				}
+				fmt.Printf("[APP] Shutdown requested (%s)\n", shutdown.Reason)
+				cancel()
+				return
+			}
+		}
+	}()
+
+	netNode.StartShutdownHandler(ctx)
 
 	peerPresence := presence.NewService(eventBus, database.NewPeerRepository())
 	peerPresence.Start(ctx)
@@ -54,7 +87,7 @@ func Run(_ []string) error {
 	jobScheduler := scheduler.New()
 
 	fmt.Println("[APP] Starting auto-update checker...")
-	updater := update.NewService(configStore)
+	updater := update.NewService(configStore, shutdownNotifier)
 	if err := jobScheduler.Register(tasks.NewUpdateCheckTask(updater, 3*time.Minute)); err != nil {
 		return err
 	}

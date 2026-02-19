@@ -25,3 +25,8 @@ type ConfigChanged struct {
 	UpdateFeedURL   string
 	At              time.Time
 }
+
+type ShutdownRequested struct {
+	Reason string
+	At     time.Time
+}

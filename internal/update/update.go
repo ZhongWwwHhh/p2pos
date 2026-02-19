@@ -17,6 +17,7 @@ import (
 
 type Service struct {
 	configProvider FeedURLProvider
+	shutdown       ShutdownRequester
 	restarter      Restarter
 	mu             sync.Mutex
 }
@@ -25,9 +26,14 @@ type FeedURLProvider interface {
 	UpdateFeedURL() (string, error)
 }
 
-func NewService(configProvider FeedURLProvider) *Service {
+type ShutdownRequester interface {
+	RequestShutdown(reason string)
+}
+
+func NewService(configProvider FeedURLProvider, shutdown ShutdownRequester) *Service {
 	return &Service{
 		configProvider: configProvider,
+		shutdown:       shutdown,
 		restarter: NewChainRestarter(
 			NewSystemdRestarter("p2pos"),
 			&SpawnSelfRestarter{},
@@ -35,7 +41,7 @@ func NewService(configProvider FeedURLProvider) *Service {
 	}
 }
 
-func NewServiceWithRestarter(configProvider FeedURLProvider, restarter Restarter) *Service {
+func NewServiceWithRestarter(configProvider FeedURLProvider, shutdown ShutdownRequester, restarter Restarter) *Service {
 	if restarter == nil {
 		restarter = NewChainRestarter(
 			NewSystemdRestarter("p2pos"),
@@ -44,6 +50,7 @@ func NewServiceWithRestarter(configProvider FeedURLProvider, restarter Restarter
 	}
 	return &Service{
 		configProvider: configProvider,
+		shutdown:       shutdown,
 		restarter:      restarter,
 	}
 }
@@ -316,8 +323,9 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("updated but restart failed: %w", err)
 	}
 
-	// restart succeeded, exit current process to finish handover
-	os.Exit(0)
+	if s.shutdown != nil {
+		s.shutdown.RequestShutdown("update-applied")
+	}
 
 	return nil
 }

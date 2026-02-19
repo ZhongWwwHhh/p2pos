@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"p2pos/internal/events"
@@ -23,6 +24,8 @@ type Node struct {
 	PingService *ping.PingService
 	Tracker     *Tracker
 	bus         *events.Bus
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 type ListenProvider interface {
@@ -55,7 +58,10 @@ func NewNode(cfg ListenProvider, privKey crypto.PrivKey, bus *events.Bus) (*Node
 }
 
 func (n *Node) Close() error {
-	return n.Host.Close()
+	n.closeOnce.Do(func() {
+		n.closeErr = n.Host.Close()
+	})
+	return n.closeErr
 }
 
 func (n *Node) LogLocalAddrs() error {
@@ -128,6 +134,36 @@ func (n *Node) StartBootstrap(ctx context.Context, resolver Resolver, interval t
 				if !run() {
 					return
 				}
+			}
+		}
+	}()
+}
+
+func (n *Node) StartShutdownHandler(ctx context.Context) {
+	if n.bus == nil {
+		return
+	}
+
+	eventCh, cancel := n.bus.Subscribe(16)
+	go func() {
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-eventCh:
+				if !ok {
+					return
+				}
+				shutdown, ok := evt.(events.ShutdownRequested)
+				if !ok {
+					continue
+				}
+				fmt.Printf("[NODE] Shutdown requested (%s), closing host...\n", shutdown.Reason)
+				if err := n.Close(); err != nil {
+					fmt.Printf("[NODE] Host close failed: %v\n", err)
+				}
+				return
 			}
 		}
 	}()
