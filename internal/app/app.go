@@ -25,18 +25,13 @@ func Run(_ []string) error {
 		return err
 	}
 
-	nodePrivKey, err := network.LoadOrCreatePrivateKey()
-	if err != nil {
-		return err
-	}
-
 	eventBus := events.NewBus()
 	configStore := config.NewStore(eventBus)
 	if err := configStore.Init(); err != nil {
 		return err
 	}
 
-	netNode, err := network.NewNode(configStore, nodePrivKey, eventBus)
+	netNode, err := network.NewNode(configStore, eventBus)
 	if err != nil {
 		return err
 	}

@@ -1,16 +1,20 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"p2pos/internal/database"
 	"strings"
 	"sync"
 	"time"
 
 	"p2pos/internal/events"
+
+	"github.com/libp2p/go-libp2p/core/crypto"
 )
 
 type Config struct {
@@ -50,10 +54,11 @@ func (l ListenConfig) Values() []string {
 }
 
 type Store struct {
-	mu   sync.RWMutex
-	path string
-	bus  *events.Bus
-	cfg  Config
+	mu          sync.RWMutex
+	path        string
+	bus         *events.Bus
+	cfg         Config
+	nodePrivKey crypto.PrivKey
 }
 
 const defaultConfigPath = "config.json"
@@ -90,8 +95,14 @@ func (s *Store) Init() error {
 
 	normalized := normalize(*cfg)
 
+	nodePrivKey, err := loadOrCreatePrivateKey()
+	if err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	s.cfg = normalized
+	s.nodePrivKey = nodePrivKey
 	s.mu.Unlock()
 
 	return nil
@@ -107,6 +118,12 @@ func (s *Store) ListenAddresses() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]string(nil), s.cfg.Listen.Values()...)
+}
+
+func (s *Store) NodePrivateKey() crypto.PrivKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nodePrivKey
 }
 
 func (s *Store) Update(next Config) error {
@@ -200,4 +217,50 @@ func toEventConnections(conns []Connection) []events.ConfigConnection {
 		})
 	}
 	return out
+}
+
+func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
+	storedPrivKey, err := database.LoadNodePrivateKey()
+	if err != nil {
+		return nil, err
+	}
+
+	generateAndPersistNodeKey := func() (crypto.PrivKey, error) {
+		generatedKey, _, err := crypto.GenerateEd25519Key(nil)
+		if err != nil {
+			return nil, err
+		}
+
+		privKeyBytes, err := crypto.MarshalPrivateKey(generatedKey)
+		if err != nil {
+			return nil, err
+		}
+
+		encodedPrivKey := base64.StdEncoding.EncodeToString(privKeyBytes)
+		if err := database.SaveNodePrivateKey(encodedPrivKey); err != nil {
+			return nil, err
+		}
+
+		fmt.Println("[NODE] Generated and persisted new node private key")
+		return generatedKey, nil
+	}
+
+	if storedPrivKey == "" {
+		return generateAndPersistNodeKey()
+	}
+
+	privKeyBytes, err := base64.StdEncoding.DecodeString(storedPrivKey)
+	if err != nil {
+		fmt.Printf("[NODE] Stored private key is invalid base64, regenerating: %v\n", err)
+		return generateAndPersistNodeKey()
+	}
+
+	loadedKey, err := crypto.UnmarshalPrivateKey(privKeyBytes)
+	if err != nil {
+		fmt.Printf("[NODE] Stored private key is invalid, regenerating: %v\n", err)
+		return generateAndPersistNodeKey()
+	}
+
+	fmt.Println("[NODE] Loaded persisted node private key")
+	return loadedKey, nil
 }

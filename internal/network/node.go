@@ -30,12 +30,18 @@ type Node struct {
 
 type ListenProvider interface {
 	ListenAddresses() []string
+	NodePrivateKey() crypto.PrivKey
 }
 
-func NewNode(cfg ListenProvider, privKey crypto.PrivKey, bus *events.Bus) (*Node, error) {
+func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 	listenAddrs, err := buildListenMultiaddrs(cfg.ListenAddresses())
 	if err != nil {
 		return nil, err
+	}
+
+	privKey := cfg.NodePrivateKey()
+	if privKey == nil {
+		return nil, fmt.Errorf("node private key is not initialized")
 	}
 
 	hostNode, err := libp2p.New(
