@@ -4,15 +4,24 @@ import (
 	"context"
 	"time"
 
+	"p2pos/internal/database"
 	"p2pos/internal/network"
 )
 
 type PeerSyncTask struct {
 	node *network.Node
+	repo PeerStatusRepository
 }
 
-func NewPeerSyncTask(node *network.Node) *PeerSyncTask {
-	return &PeerSyncTask{node: node}
+type PeerStatusRepository interface {
+	ListPeerStatuses(ctx context.Context) ([]database.Peer, error)
+}
+
+func NewPeerSyncTask(node *network.Node, repo PeerStatusRepository) *PeerSyncTask {
+	return &PeerSyncTask{
+		node: node,
+		repo: repo,
+	}
 }
 
 func (t *PeerSyncTask) Name() string {
@@ -28,5 +37,22 @@ func (t *PeerSyncTask) RunOnStart() bool {
 }
 
 func (t *PeerSyncTask) Run(ctx context.Context) error {
+	if t.repo != nil {
+		peers, err := t.repo.ListPeerStatuses(ctx)
+		if err != nil {
+			return err
+		}
+		candidates := make([]string, 0, len(peers))
+		for _, p := range peers {
+			if p.LastRemoteAddr == "" {
+				continue
+			}
+			candidates = append(candidates, p.LastRemoteAddr)
+		}
+		if err := t.node.SyncPeerAddrs(ctx, candidates); err != nil {
+			return err
+		}
+	}
+
 	return t.node.SyncPeerGraph(ctx)
 }

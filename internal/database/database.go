@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"p2pos/internal/events"
+
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -407,4 +409,137 @@ func (r *PeerRepository) ListPeerStatuses(_ context.Context) ([]Peer, error) {
 		return nil, err
 	}
 	return peers, nil
+}
+
+func (r *PeerRepository) UpsertSelf(_ context.Context, peerID string) error {
+	now := time.Now().UTC()
+	peer := Peer{
+		PeerID:       peerID,
+		LastSeenAt:   now,
+		Reachability: "self",
+		ObservedBy:   peerID,
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "peer_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"last_seen_at":     peer.LastSeenAt,
+				"reachability":     peer.Reachability,
+				"observed_by":      peer.ObservedBy,
+				"last_ping_ok":     false,
+				"last_ping_at":     nil,
+				"last_ping_rtt_ms": nil,
+			}),
+		}).Create(&peer).Error
+	})
+}
+
+func (r *PeerRepository) UpsertDiscovered(_ context.Context, peerID, addr, observedBy string) error {
+	now := time.Now().UTC()
+	peer := Peer{
+		PeerID:         peerID,
+		LastRemoteAddr: addr,
+		LastSeenAt:     now,
+		Reachability:   "discovered",
+		ObservedBy:     observedBy,
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "peer_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"last_remote_addr": peer.LastRemoteAddr,
+				"last_seen_at":     peer.LastSeenAt,
+				"observed_by":      peer.ObservedBy,
+				"reachability": gorm.Expr(
+					"CASE WHEN reachability IN ('connected','self') THEN reachability ELSE ? END",
+					peer.Reachability,
+				),
+			}),
+		}).Create(&peer).Error
+	})
+}
+
+func (r *PeerRepository) MergeObservedState(_ context.Context, state events.PeerStateObserved) error {
+	if state.PeerID == "" {
+		return nil
+	}
+
+	incoming := Peer{
+		PeerID:         state.PeerID,
+		LastRemoteAddr: state.RemoteAddr,
+		LastSeenAt:     state.LastSeenAt.UTC(),
+		LastPingRTTMs:  state.LastPingRTTMs,
+		LastPingOK:     state.LastPingOK,
+		LastPingAt:     cloneUTC(state.LastPingAt),
+		Reachability:   state.Reachability,
+		ObservedBy:     state.ObservedBy,
+	}
+	if incoming.LastSeenAt.IsZero() {
+		incoming.LastSeenAt = time.Now().UTC()
+	}
+	if incoming.Reachability == "" {
+		incoming.Reachability = "discovered"
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var existing Peer
+		err := tx.Where("peer_id = ?", incoming.PeerID).First(&existing).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return tx.Create(&incoming).Error
+			}
+			return err
+		}
+
+		if existing.Reachability == "self" {
+			return nil
+		}
+
+		existingUpdated := peerUpdatedAt(existing)
+		incomingUpdated := state.ObservedAt.UTC()
+		if incomingUpdated.IsZero() {
+			incomingUpdated = peerUpdatedAt(incoming)
+		}
+
+		updates := map[string]interface{}{}
+		if existing.LastRemoteAddr == "" && incoming.LastRemoteAddr != "" {
+			updates["last_remote_addr"] = incoming.LastRemoteAddr
+		}
+
+		if incomingUpdated.After(existingUpdated) {
+			updates["last_seen_at"] = incoming.LastSeenAt
+			updates["last_ping_ok"] = incoming.LastPingOK
+			updates["last_ping_at"] = incoming.LastPingAt
+			updates["last_ping_rtt_ms"] = incoming.LastPingRTTMs
+			updates["observed_by"] = incoming.ObservedBy
+			if existing.Reachability != "connected" && existing.Reachability != "self" {
+				updates["reachability"] = incoming.Reachability
+			}
+			if incoming.LastRemoteAddr != "" {
+				updates["last_remote_addr"] = incoming.LastRemoteAddr
+			}
+		}
+
+		if len(updates) == 0 {
+			return nil
+		}
+		return tx.Model(&Peer{}).Where("peer_id = ?", incoming.PeerID).Updates(updates).Error
+	})
+}
+
+func cloneUTC(v *time.Time) *time.Time {
+	if v == nil {
+		return nil
+	}
+	t := v.UTC()
+	return &t
+}
+
+func peerUpdatedAt(p Peer) time.Time {
+	if p.LastPingAt != nil && !p.LastPingAt.IsZero() {
+		return p.LastPingAt.UTC()
+	}
+	return p.LastSeenAt.UTC()
 }

@@ -10,6 +10,8 @@ import (
 type PeerRepository interface {
 	UpsertLastSeen(ctx context.Context, peerID, remoteAddr, observedBy, reachability string) error
 	UpdateReachability(ctx context.Context, peerID, observedBy, reachability string) error
+	UpsertDiscovered(ctx context.Context, peerID, addr, observedBy string) error
+	MergeObservedState(ctx context.Context, state events.PeerStateObserved) error
 }
 
 type Service struct {
@@ -46,6 +48,14 @@ func (s *Service) Start(ctx context.Context) {
 				case events.PeerDisconnected:
 					if err := s.repo.UpdateReachability(ctx, e.PeerID, s.observerID, "disconnected"); err != nil {
 						fmt.Printf("[PRESENCE] Failed to update peer reachability %s: %v\n", e.PeerID, err)
+					}
+				case events.PeerDiscovered:
+					if err := s.repo.UpsertDiscovered(ctx, e.PeerID, e.Addr, s.observerID); err != nil {
+						fmt.Printf("[PRESENCE] Failed to upsert discovered peer %s: %v\n", e.PeerID, err)
+					}
+				case events.PeerStateObserved:
+					if err := s.repo.MergeObservedState(ctx, e); err != nil {
+						fmt.Printf("[PRESENCE] Failed to merge observed state for %s: %v\n", e.PeerID, err)
 					}
 				}
 			}

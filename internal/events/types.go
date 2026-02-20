@@ -14,6 +14,24 @@ type PeerDisconnected struct {
 	At         time.Time
 }
 
+type PeerDiscovered struct {
+	PeerID string
+	Addr   string
+	At     time.Time
+}
+
+type PeerStateObserved struct {
+	PeerID        string
+	RemoteAddr    string
+	LastSeenAt    time.Time
+	LastPingRTTMs *float64
+	LastPingOK    bool
+	LastPingAt    *time.Time
+	Reachability  string
+	ObservedBy    string
+	ObservedAt    time.Time
+}
+
 type ConfigConnection struct {
 	Type    string
 	Address string

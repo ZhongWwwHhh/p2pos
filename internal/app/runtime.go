@@ -55,6 +55,9 @@ func startShutdownBridge(ctx context.Context, cancel context.CancelFunc, bus *ev
 func startRuntimeServices(ctx context.Context, bus *events.Bus, node *network.Node) {
 	node.StartShutdownHandler(ctx)
 	peerRepo := database.NewPeerRepository()
+	if err := peerRepo.UpsertSelf(ctx, node.Host.ID().String()); err != nil {
+		fmt.Printf("[PRESENCE] Failed to initialize self peer record: %v\n", err)
+	}
 	peerPresence := presence.NewService(bus, peerRepo, node.Host.ID().String())
 	peerPresence.Start(ctx)
 	node.SetStatusProvider(status.NewService(peerRepo))
@@ -79,7 +82,7 @@ func registerScheduledTasks(
 	if err := s.Register(tasks.NewPingTask(node.Tracker, node.PingService, database.NewPeerRepository(), node.Host.ID().String())); err != nil {
 		return err
 	}
-	if err := s.Register(tasks.NewPeerSyncTask(node)); err != nil {
+	if err := s.Register(tasks.NewPeerSyncTask(node, database.NewPeerRepository())); err != nil {
 		return err
 	}
 
