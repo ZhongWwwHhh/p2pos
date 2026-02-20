@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
@@ -56,7 +58,15 @@ func Init() error {
 	dbPath := filepath.Join(exeDir, "sqlite.db")
 
 	// 打开或创建数据库
-	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+		Logger: gormlogger.New(
+			log.New(os.Stdout, "", log.LstdFlags),
+			gormlogger.Config{
+				IgnoreRecordNotFoundError: true,
+				LogLevel:                  gormlogger.Error,
+			},
+		),
+	})
 	if err != nil {
 		return err
 	}

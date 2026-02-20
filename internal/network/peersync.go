@@ -53,6 +53,7 @@ func (n *Node) SyncPeerGraph(ctx context.Context) error {
 	if len(connectedPeers) == 0 {
 		return nil
 	}
+	attempted := make(map[peerstore.ID]struct{})
 
 	for _, remotePeerID := range connectedPeers {
 		syncCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -66,12 +67,12 @@ func (n *Node) SyncPeerGraph(ctx context.Context) error {
 		for _, rec := range records {
 			n.publishObservedRecord(rec)
 			if rec.RemoteAddr != "" {
-				n.tryConnectDiscovered(ctx, rec.RemoteAddr)
+				n.tryConnectDiscovered(ctx, rec.RemoteAddr, attempted)
 			}
 		}
 
 		for _, addr := range peers {
-			n.tryConnectDiscovered(ctx, addr)
+			n.tryConnectDiscovered(ctx, addr, attempted)
 		}
 	}
 
@@ -79,8 +80,9 @@ func (n *Node) SyncPeerGraph(ctx context.Context) error {
 }
 
 func (n *Node) SyncPeerAddrs(ctx context.Context, peers []string) error {
+	attempted := make(map[peerstore.ID]struct{})
 	for _, addr := range peers {
-		n.tryConnectDiscovered(ctx, addr)
+		n.tryConnectDiscovered(ctx, addr, attempted)
 	}
 	return nil
 }
@@ -181,13 +183,19 @@ func (n *Node) collectKnownPeerRecords() []peerExchangeRecord {
 	return out
 }
 
-func (n *Node) tryConnectDiscovered(ctx context.Context, addr string) {
+func (n *Node) tryConnectDiscovered(ctx context.Context, addr string, attempted map[peerstore.ID]struct{}) {
 	info, err := ParseP2PAddr(addr)
 	if err != nil {
 		return
 	}
 	if info.ID == n.Host.ID() {
 		return
+	}
+	if attempted != nil {
+		if _, ok := attempted[info.ID]; ok {
+			return
+		}
+		attempted[info.ID] = struct{}{}
 	}
 	if n.bus != nil {
 		n.bus.Publish(events.PeerDiscovered{
@@ -196,13 +204,15 @@ func (n *Node) tryConnectDiscovered(ctx context.Context, addr string) {
 			At:     time.Now().UTC(),
 		})
 	}
-	if n.Host.Network().Connectedness(info.ID) == libp2pnet.Connected {
+	if len(n.Host.Network().ConnsToPeer(info.ID)) > 0 || n.Host.Network().Connectedness(info.ID) == libp2pnet.Connected {
 		return
 	}
 	if err := n.Connect(ctx, *info); err != nil {
 		return
 	}
-	fmt.Printf("[PEERSYNC] Connected discovered peer: %s\n", info.ID)
+	if len(n.Host.Network().ConnsToPeer(info.ID)) > 0 {
+		fmt.Printf("[PEERSYNC] Connected discovered peer: %s\n", info.ID)
+	}
 }
 
 func (n *Node) publishObservedRecord(rec peerExchangeRecord) {

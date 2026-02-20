@@ -7,7 +7,6 @@ import (
 
 	"p2pos/internal/network"
 
-	peerstore "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
 )
 
@@ -50,28 +49,26 @@ func (t *PingTask) Run(ctx context.Context) error {
 	}
 
 	for _, p := range peers {
-		go func(peerID peerstore.ID) {
-			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-
-			ch := t.pingService.Ping(pingCtx, peerID)
-			select {
-			case <-pingCtx.Done():
-				fmt.Printf("[PING] Ping timeout %s: %v\n", peerID.String(), pingCtx.Err())
-				if t.repo != nil {
-					if err := t.repo.UpdatePingResult(ctx, peerID.String(), t.observerID, false, 0); err != nil {
-						fmt.Printf("[PING] Failed to store ping result for %s: %v\n", peerID.String(), err)
-					}
-				}
-			case res := <-ch:
-				fmt.Printf("[PING] Pinged %s: RTT %v\n", peerID.String(), res.RTT)
-				if t.repo != nil {
-					if err := t.repo.UpdatePingResult(ctx, peerID.String(), t.observerID, true, res.RTT); err != nil {
-						fmt.Printf("[PING] Failed to store ping result for %s: %v\n", peerID.String(), err)
-					}
+		peerID := p.ID
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		ch := t.pingService.Ping(pingCtx, peerID)
+		select {
+		case <-pingCtx.Done():
+			fmt.Printf("[PING] Ping timeout %s: %v\n", peerID.String(), pingCtx.Err())
+			if t.repo != nil {
+				if err := t.repo.UpdatePingResult(ctx, peerID.String(), t.observerID, false, 0); err != nil {
+					fmt.Printf("[PING] Failed to store ping result for %s: %v\n", peerID.String(), err)
 				}
 			}
-		}(p.ID)
+		case res := <-ch:
+			fmt.Printf("[PING] Pinged %s: RTT %v\n", peerID.String(), res.RTT)
+			if t.repo != nil {
+				if err := t.repo.UpdatePingResult(ctx, peerID.String(), t.observerID, true, res.RTT); err != nil {
+					fmt.Printf("[PING] Failed to store ping result for %s: %v\n", peerID.String(), err)
+				}
+			}
+		}
+		cancel()
 	}
 
 	return nil
