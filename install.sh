@@ -99,8 +99,9 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 ExecStart=${BINARY_PATH}
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=0
 StandardOutput=journal
 StandardError=journal
 
