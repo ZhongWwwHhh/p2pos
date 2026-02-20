@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"p2pos/internal/config"
 	"runtime"
 	"strings"
@@ -18,7 +17,6 @@ import (
 type Service struct {
 	configProvider FeedURLProvider
 	shutdown       ShutdownRequester
-	restarter      Restarter
 	mu             sync.Mutex
 }
 
@@ -34,86 +32,7 @@ func NewService(configProvider FeedURLProvider, shutdown ShutdownRequester) *Ser
 	return &Service{
 		configProvider: configProvider,
 		shutdown:       shutdown,
-		restarter: NewChainRestarter(
-			NewSystemdRestarter("p2pos"),
-			&SpawnSelfRestarter{},
-		),
 	}
-}
-
-func NewServiceWithRestarter(configProvider FeedURLProvider, shutdown ShutdownRequester, restarter Restarter) *Service {
-	if restarter == nil {
-		restarter = NewChainRestarter(
-			NewSystemdRestarter("p2pos"),
-			&SpawnSelfRestarter{},
-		)
-	}
-	return &Service{
-		configProvider: configProvider,
-		shutdown:       shutdown,
-		restarter:      restarter,
-	}
-}
-
-type Restarter interface {
-	Restart(ctx context.Context) error
-}
-
-type RestartStrategy interface {
-	Name() string
-	Restart(ctx context.Context) error
-}
-
-type ChainRestarter struct {
-	strategies []RestartStrategy
-}
-
-func NewChainRestarter(strategies ...RestartStrategy) *ChainRestarter {
-	return &ChainRestarter{strategies: strategies}
-}
-
-func (r *ChainRestarter) Restart(ctx context.Context) error {
-	var errs []error
-	for _, strategy := range r.strategies {
-		fmt.Printf("[UPDATE] Restart strategy: %s\n", strategy.Name())
-		if err := strategy.Restart(ctx); err != nil {
-			fmt.Printf("[UPDATE] Restart strategy %s failed: %v\n", strategy.Name(), err)
-			errs = append(errs, fmt.Errorf("%s: %w", strategy.Name(), err))
-			continue
-		}
-		fmt.Printf("[UPDATE] Restart strategy %s succeeded\n", strategy.Name())
-		return nil
-	}
-	return fmt.Errorf("all restart strategies failed: %w", errorsJoin(errs))
-}
-
-type SystemdRestarter struct {
-	serviceName string
-}
-
-func NewSystemdRestarter(serviceName string) *SystemdRestarter {
-	return &SystemdRestarter{serviceName: serviceName}
-}
-
-func (r *SystemdRestarter) Name() string {
-	return "systemd-restart"
-}
-
-func (r *SystemdRestarter) Restart(ctx context.Context) error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("unsupported on %s", runtime.GOOS)
-	}
-	return exec.CommandContext(ctx, "systemctl", "restart", r.serviceName).Run()
-}
-
-type SpawnSelfRestarter struct{}
-
-func (r *SpawnSelfRestarter) Name() string {
-	return "spawn-self"
-}
-
-func (r *SpawnSelfRestarter) Restart(_ context.Context) error {
-	return RestartApplication()
 }
 
 // GithubRelease represents a GitHub release
@@ -319,46 +238,10 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.restarter.Restart(ctx); err != nil {
-		return fmt.Errorf("updated but restart failed: %w", err)
-	}
-
+	fmt.Println("[UPDATE] Update applied, requesting graceful shutdown for service restart")
 	if s.shutdown != nil {
 		s.shutdown.RequestShutdown("update-applied")
 	}
 
 	return nil
-}
-
-// RestartApplication restarts the current application
-func RestartApplication() error {
-	exePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
-	cmd := exec.Command(exePath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to restart application: %w", err)
-	}
-
-	return nil
-}
-
-func errorsJoin(errs []error) error {
-	if len(errs) == 0 {
-		return nil
-	}
-	msg := ""
-	for i, err := range errs {
-		if i > 0 {
-			msg += "; "
-		}
-		msg += err.Error()
-	}
-	return fmt.Errorf("%s", msg)
 }
