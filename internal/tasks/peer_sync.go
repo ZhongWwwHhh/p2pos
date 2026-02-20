@@ -15,6 +15,7 @@ type PeerSyncTask struct {
 
 type PeerStatusRepository interface {
 	ListPeerStatuses(ctx context.Context) ([]database.Peer, error)
+	DeleteDisconnectedBefore(ctx context.Context, cutoff time.Time) error
 }
 
 func NewPeerSyncTask(node *network.Node, repo PeerStatusRepository) *PeerSyncTask {
@@ -38,6 +39,10 @@ func (t *PeerSyncTask) RunOnStart() bool {
 
 func (t *PeerSyncTask) Run(ctx context.Context) error {
 	if t.repo != nil {
+		if err := t.repo.DeleteDisconnectedBefore(ctx, time.Now().UTC().Add(-10*time.Minute)); err != nil {
+			return err
+		}
+
 		peers, err := t.repo.ListPeerStatuses(ctx)
 		if err != nil {
 			return err

@@ -16,6 +16,7 @@ import (
 )
 
 const peerExchangeProtocolID = protocol.ID("/p2pos/peer-exchange/1.0.0")
+const staleDisconnectedTTL = 10 * time.Minute
 
 type peerExchangeResponse struct {
 	Peers   []string             `json:"peers,omitempty"`
@@ -56,7 +57,7 @@ func (n *Node) SyncPeerGraph(ctx context.Context) error {
 	attempted := make(map[peerstore.ID]struct{})
 
 	for _, remotePeerID := range connectedPeers {
-		syncCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		syncCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		peers, records, err := n.requestPeerAddrs(syncCtx, remotePeerID)
 		cancel()
 		if err != nil {
@@ -65,6 +66,9 @@ func (n *Node) SyncPeerGraph(ctx context.Context) error {
 		}
 
 		for _, rec := range records {
+			if isStaleDisconnectedRecord(rec.Reachability, rec.UpdatedAt) {
+				continue
+			}
 			n.publishObservedRecord(rec)
 			if rec.RemoteAddr != "" {
 				n.tryConnectDiscovered(ctx, rec.RemoteAddr, attempted)
@@ -150,7 +154,11 @@ func (n *Node) collectKnownPeerRecords() []peerExchangeRecord {
 	snapshot, err := n.localStatus(ctx)
 	if err == nil {
 		for _, rec := range snapshot {
-			add(statusToExchangeRecord(rec))
+			ex := statusToExchangeRecord(rec)
+			if isStaleDisconnectedRecord(ex.Reachability, ex.UpdatedAt) {
+				continue
+			}
+			add(ex)
 		}
 	}
 
@@ -257,4 +265,14 @@ func cloneTimePtr(v *time.Time) *time.Time {
 	}
 	t := v.UTC()
 	return &t
+}
+
+func isStaleDisconnectedRecord(reachability string, updatedAt time.Time) bool {
+	if reachability != "disconnected" {
+		return false
+	}
+	if updatedAt.IsZero() {
+		return true
+	}
+	return time.Since(updatedAt.UTC()) > staleDisconnectedTTL
 }

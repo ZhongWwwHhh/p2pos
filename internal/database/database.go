@@ -104,15 +104,18 @@ func configureSQLite(db *gorm.DB) error {
 	sqlDB.SetMaxIdleConns(1)
 
 	// Improve concurrent read/write behavior and wait for lock instead of failing fast.
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL;",
-		"PRAGMA synchronous=NORMAL;",
-		"PRAGMA busy_timeout=5000;",
-	}
-	for _, p := range pragmas {
-		if err := db.Exec(p).Error; err != nil {
-			return err
+	// Some filesystems (e.g. certain mounted network/host filesystems) may not support WAL.
+	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
+		fmt.Printf("[DB] WAL not available, fallback to DELETE journal mode: %v\n", err)
+		if fallbackErr := db.Exec("PRAGMA journal_mode=DELETE;").Error; fallbackErr != nil {
+			fmt.Printf("[DB] Failed to switch journal mode to DELETE: %v\n", fallbackErr)
 		}
+	}
+	if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
+		fmt.Printf("[DB] Failed to set synchronous=NORMAL: %v\n", err)
+	}
+	if err := db.Exec("PRAGMA busy_timeout=5000;").Error; err != nil {
+		fmt.Printf("[DB] Failed to set busy_timeout: %v\n", err)
 	}
 	return nil
 }
@@ -579,4 +582,8 @@ func peerUpdatedAt(p Peer) time.Time {
 		return p.LastPingAt.UTC()
 	}
 	return p.LastSeenAt.UTC()
+}
+
+func (r *PeerRepository) DeleteDisconnectedBefore(_ context.Context, cutoff time.Time) error {
+	return DB.Where("reachability = ? AND last_seen_at < ?", "disconnected", cutoff.UTC()).Delete(&Peer{}).Error
 }
