@@ -90,14 +90,15 @@ func (s *Scheduler) runTaskLoop(ctx context.Context, task Task) {
 		return
 	}
 
-	ticker := time.NewTicker(task.Interval())
-	defer ticker.Stop()
-
 	for {
+		timer := time.NewTimer(task.Interval())
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if !run() {
 				return
 			}
