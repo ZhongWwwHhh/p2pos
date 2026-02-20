@@ -72,6 +72,9 @@ func Init() error {
 	}
 
 	DB = database
+	if err := configureSQLite(DB); err != nil {
+		return err
+	}
 
 	// 自动迁移表结构
 	if err := DB.AutoMigrate(&Setting{}, &Peer{}); err != nil {
@@ -87,6 +90,30 @@ func Init() error {
 		return err
 	}
 
+	return nil
+}
+
+func configureSQLite(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+
+	// SQLite single-writer model: one connection avoids cross-connection write lock contention.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
+	// Improve concurrent read/write behavior and wait for lock instead of failing fast.
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL;",
+		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA busy_timeout=5000;",
+	}
+	for _, p := range pragmas {
+		if err := db.Exec(p).Error; err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
