@@ -20,6 +20,7 @@ import (
 type Config struct {
 	InitConnections []Connection `json:"init_connections"`
 	Listen          ListenConfig `json:"listen"`
+	NetworkMode     string       `json:"network_mode"`
 	UpdateFeedURL   string       `json:"update_feed_url"`
 }
 
@@ -63,6 +64,7 @@ type Store struct {
 
 const defaultConfigPath = "config.json"
 const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
+const defaultNetworkMode = "auto"
 
 func NewStore(bus *events.Bus) *Store {
 	return &Store{
@@ -75,6 +77,7 @@ func NewStore(bus *events.Bus) *Store {
 func Default() Config {
 	return Config{
 		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
+		NetworkMode:   defaultNetworkMode,
 		UpdateFeedURL: defaultUpdateFeedURL,
 	}
 }
@@ -126,6 +129,12 @@ func (s *Store) NodePrivateKey() crypto.PrivKey {
 	return s.nodePrivKey
 }
 
+func (s *Store) NetworkMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.NetworkMode
+}
+
 func (s *Store) Update(next Config) error {
 	normalized := normalize(next)
 
@@ -141,6 +150,7 @@ func (s *Store) Update(next Config) error {
 		s.bus.Publish(events.ConfigChanged{
 			Listen:          append([]string(nil), normalized.Listen.Values()...),
 			InitConnections: toEventConnections(normalized.InitConnections),
+			NetworkMode:     normalized.NetworkMode,
 			UpdateFeedURL:   normalized.UpdateFeedURL,
 			At:              time.Now().UTC(),
 		})
@@ -176,6 +186,15 @@ func normalize(cfg Config) Config {
 	if len(cfg.Listen) == 0 {
 		cfg.Listen = Default().Listen
 	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.NetworkMode))
+	switch mode {
+	case "", "auto":
+		cfg.NetworkMode = defaultNetworkMode
+	case "public", "private":
+		cfg.NetworkMode = mode
+	default:
+		cfg.NetworkMode = defaultNetworkMode
+	}
 	if strings.TrimSpace(cfg.UpdateFeedURL) == "" {
 		cfg.UpdateFeedURL = defaultUpdateFeedURL
 	}
@@ -186,6 +205,7 @@ func copyConfig(cfg Config) Config {
 	next := Config{
 		InitConnections: make([]Connection, len(cfg.InitConnections)),
 		Listen:          append(ListenConfig(nil), cfg.Listen...),
+		NetworkMode:     cfg.NetworkMode,
 		UpdateFeedURL:   cfg.UpdateFeedURL,
 	}
 	copy(next.InitConnections, cfg.InitConnections)

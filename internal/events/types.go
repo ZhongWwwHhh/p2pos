@@ -22,6 +22,7 @@ type ConfigConnection struct {
 type ConfigChanged struct {
 	Listen          []string
 	InitConnections []ConfigConnection
+	NetworkMode     string
 	UpdateFeedURL   string
 	At              time.Time
 }
