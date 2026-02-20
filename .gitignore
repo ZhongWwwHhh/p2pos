@@ -1,4 +1,4 @@
 /p2pos
 /*.exe
 /test
-/sqlite.db
+/sqlite.db*
