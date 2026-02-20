@@ -14,6 +14,7 @@ import (
 	"p2pos/internal/network"
 	"p2pos/internal/presence"
 	"p2pos/internal/scheduler"
+	"p2pos/internal/status"
 	"p2pos/internal/tasks"
 	"p2pos/internal/update"
 )
@@ -53,8 +54,10 @@ func startShutdownBridge(ctx context.Context, cancel context.CancelFunc, bus *ev
 
 func startRuntimeServices(ctx context.Context, bus *events.Bus, node *network.Node) {
 	node.StartShutdownHandler(ctx)
-	peerPresence := presence.NewService(bus, database.NewPeerRepository())
+	peerRepo := database.NewPeerRepository()
+	peerPresence := presence.NewService(bus, peerRepo, node.Host.ID().String())
 	peerPresence.Start(ctx)
+	node.SetStatusProvider(status.NewService(peerRepo))
 }
 
 func registerScheduledTasks(
@@ -73,7 +76,10 @@ func registerScheduledTasks(
 	resolver := network.NewConfigResolver(node.Host.ID(), cfg, network.NewNetDNSResolver())
 	node.StartBootstrap(ctx, resolver, time.Minute)
 
-	if err := s.Register(tasks.NewPingTask(node.Tracker, node.PingService)); err != nil {
+	if err := s.Register(tasks.NewPingTask(node.Tracker, node.PingService, database.NewPeerRepository(), node.Host.ID().String())); err != nil {
+		return err
+	}
+	if err := s.Register(tasks.NewPeerSyncTask(node)); err != nil {
 		return err
 	}
 

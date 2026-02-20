@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"p2pos/internal/events"
+	"p2pos/internal/status"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -24,6 +25,8 @@ type Node struct {
 	PingService *ping.PingService
 	Tracker     *Tracker
 	bus         *events.Bus
+	statusMu    sync.RWMutex
+	status      StatusProvider
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -31,6 +34,10 @@ type Node struct {
 type ListenProvider interface {
 	ListenAddresses() []string
 	NodePrivateKey() crypto.PrivKey
+}
+
+type StatusProvider interface {
+	Snapshot(ctx context.Context) ([]status.Record, error)
 }
 
 func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
@@ -60,6 +67,8 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 		bus:         bus,
 	}
 	n.registerConnectionNotifications()
+	n.registerPeerExchangeHandler()
+	n.registerStatusHandler()
 	return n, nil
 }
 
@@ -68,6 +77,12 @@ func (n *Node) Close() error {
 		n.closeErr = n.Host.Close()
 	})
 	return n.closeErr
+}
+
+func (n *Node) SetStatusProvider(provider StatusProvider) {
+	n.statusMu.Lock()
+	n.status = provider
+	n.statusMu.Unlock()
 }
 
 func (n *Node) LogLocalAddrs() error {

@@ -14,12 +14,20 @@ import (
 type PingTask struct {
 	tracker     *network.Tracker
 	pingService *ping.PingService
+	repo        PingRepository
+	observerID  string
 }
 
-func NewPingTask(tracker *network.Tracker, pingService *ping.PingService) *PingTask {
+type PingRepository interface {
+	UpdatePingResult(ctx context.Context, peerID, observedBy string, ok bool, rtt time.Duration) error
+}
+
+func NewPingTask(tracker *network.Tracker, pingService *ping.PingService, repo PingRepository, observerID string) *PingTask {
 	return &PingTask{
 		tracker:     tracker,
 		pingService: pingService,
+		repo:        repo,
+		observerID:  observerID,
 	}
 }
 
@@ -50,8 +58,18 @@ func (t *PingTask) Run(ctx context.Context) error {
 			select {
 			case <-pingCtx.Done():
 				fmt.Printf("[PING] Ping timeout %s: %v\n", peerID.String(), pingCtx.Err())
+				if t.repo != nil {
+					if err := t.repo.UpdatePingResult(ctx, peerID.String(), t.observerID, false, 0); err != nil {
+						fmt.Printf("[PING] Failed to store ping result for %s: %v\n", peerID.String(), err)
+					}
+				}
 			case res := <-ch:
 				fmt.Printf("[PING] Pinged %s: RTT %v\n", peerID.String(), res.RTT)
+				if t.repo != nil {
+					if err := t.repo.UpdatePingResult(ctx, peerID.String(), t.observerID, true, res.RTT); err != nil {
+						fmt.Printf("[PING] Failed to store ping result for %s: %v\n", peerID.String(), err)
+					}
+				}
 			}
 		}(p.ID)
 	}

@@ -8,18 +8,21 @@ import (
 )
 
 type PeerRepository interface {
-	UpsertLastSeen(ctx context.Context, peerID, remoteAddr string) error
+	UpsertLastSeen(ctx context.Context, peerID, remoteAddr, observedBy, reachability string) error
+	UpdateReachability(ctx context.Context, peerID, observedBy, reachability string) error
 }
 
 type Service struct {
-	bus  *events.Bus
-	repo PeerRepository
+	bus        *events.Bus
+	repo       PeerRepository
+	observerID string
 }
 
-func NewService(bus *events.Bus, repo PeerRepository) *Service {
+func NewService(bus *events.Bus, repo PeerRepository, observerID string) *Service {
 	return &Service{
-		bus:  bus,
-		repo: repo,
+		bus:        bus,
+		repo:       repo,
+		observerID: observerID,
 	}
 }
 
@@ -35,12 +38,15 @@ func (s *Service) Start(ctx context.Context) {
 				if !ok {
 					return
 				}
-				connected, ok := evt.(events.PeerConnected)
-				if !ok {
-					continue
-				}
-				if err := s.repo.UpsertLastSeen(ctx, connected.PeerID, connected.RemoteAddr); err != nil {
-					fmt.Printf("[PRESENCE] Failed to update peer %s: %v\n", connected.PeerID, err)
+				switch e := evt.(type) {
+				case events.PeerConnected:
+					if err := s.repo.UpsertLastSeen(ctx, e.PeerID, e.RemoteAddr, s.observerID, "connected"); err != nil {
+						fmt.Printf("[PRESENCE] Failed to update peer %s: %v\n", e.PeerID, err)
+					}
+				case events.PeerDisconnected:
+					if err := s.repo.UpdateReachability(ctx, e.PeerID, s.observerID, "disconnected"); err != nil {
+						fmt.Printf("[PRESENCE] Failed to update peer reachability %s: %v\n", e.PeerID, err)
+					}
 				}
 			}
 		}
