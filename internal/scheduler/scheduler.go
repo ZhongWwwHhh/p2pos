@@ -81,7 +81,12 @@ func (s *Scheduler) runTaskLoop(ctx context.Context, task Task) {
 		return true
 	}
 
-	if task.RunOnStart() && !run() {
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Always execute once immediately after scheduling.
+	if !run() {
 		return
 	}
 
