@@ -84,16 +84,11 @@ func pickRelease(feedURL, channel string) (GithubRelease, error) {
 		ch = "stable"
 	}
 
-	if ch == "develop" {
-		if listURL, ok := toGitHubReleasesListURL(feedURL); ok {
-			releases, err := fetchReleaseList(listURL)
-			if err == nil {
-				for _, r := range releases {
-					if r.Draft {
-						continue
-					}
-					return r, nil
-				}
+	if listURL, ok := toGitHubReleasesListURL(feedURL); ok {
+		releases, err := fetchReleaseList(listURL)
+		if err == nil {
+			if best, ok := selectBestRelease(releases, ch); ok {
+				return best, nil
 			}
 		}
 	}
@@ -112,6 +107,23 @@ func pickRelease(feedURL, channel string) (GithubRelease, error) {
 	if listErr != nil {
 		return GithubRelease{}, fmt.Errorf("failed to fetch release feed: %w", err)
 	}
+	if best, ok := selectBestRelease(releases, ch); ok {
+		return best, nil
+	}
+
+	return GithubRelease{}, fmt.Errorf("no eligible release found for channel %s", ch)
+}
+
+func selectBestRelease(releases []GithubRelease, channel string) (GithubRelease, bool) {
+	ch := strings.ToLower(strings.TrimSpace(channel))
+	if ch == "" {
+		ch = "stable"
+	}
+
+	var (
+		best  GithubRelease
+		found bool
+	)
 	for _, r := range releases {
 		if r.Draft {
 			continue
@@ -119,10 +131,16 @@ func pickRelease(feedURL, channel string) (GithubRelease, error) {
 		if ch == "stable" && r.Prerelease {
 			continue
 		}
-		return r, nil
+		if !found {
+			best = r
+			found = true
+			continue
+		}
+		if compareVersion(strings.TrimPrefix(best.TagName, "v"), strings.TrimPrefix(r.TagName, "v")) < 0 {
+			best = r
+		}
 	}
-
-	return GithubRelease{}, fmt.Errorf("no eligible release found for channel %s", ch)
+	return best, found
 }
 
 func fetchSingleRelease(feedURL string) (GithubRelease, error) {
