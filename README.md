@@ -15,6 +15,9 @@ curl -fsSL https://raw.githubusercontent.com/ZhongWwwHhh/Ops-System/dev/install.
 The installer is interactive. It supports:
 - joining an existing system (provide `system_pubkey`)
 - bootstrapping a new system (generates system/admin/node materials)
+- for first bootstrap install, it prints:
+  - DNS TXT records (`dnsaddr=...`) for both node tcp and browser tls/ws
+  - a single `p2pos-admin://...` Web Admin bundle
 
 After install:
 - binary: `./p2pos-linux` in install directory
@@ -83,6 +86,21 @@ Example `config.json`:
   "update_feed_url": "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
 }
 ```
+
+## Bootstrap DNS TXT
+
+`init_connections` with `"type": "dns"` supports multiple TXT records per domain.
+You can publish multiple bootstrap addresses for the same peer, e.g.:
+
+```txt
+dnsaddr=/ip4/<PUBLIC_IPV4>/tcp/4100/p2p/<PEER_ID>
+dnsaddr=/ip4/<PUBLIC_IPV4>/tcp/4101/tls/sni/<ESCAPED_IP>.<PEER_CID36>.libp2p.direct/ws/p2p/<PEER_ID>
+```
+
+Resolver behavior:
+- parses all TXT records
+- supports both raw multiaddr and `dnsaddr=` prefix
+- merges all addresses by peer id
 
 ## AutoTLS (Official libp2p.direct Flow)
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multibase"
 )
 
 func RunKeygen(args []string) error {
@@ -31,6 +32,7 @@ func RunKeygen(args []string) error {
 
 	fmt.Printf("NODE_PRIV_B64=%s\n", nodePrivB64)
 	fmt.Printf("NODE_PEER_ID=%s\n", nodePeerID.String())
+	fmt.Printf("NODE_PEER_CID36=%s\n", peer.ToCid(nodePeerID).Encode(multibase.MustNewEncoder(multibase.Base36)))
 
 	if !*newSystem {
 		return nil
@@ -84,6 +86,7 @@ func RunKeygen(args []string) error {
 	fmt.Printf("SYSTEM_PUB_B64=%s\n", sysPubB64)
 	fmt.Printf("ADMIN_PRIV_B64=%s\n", adminPrivB64)
 	fmt.Printf("ADMIN_PEER_ID=%s\n", adminPeerID.String())
+	fmt.Printf("ADMIN_PEER_CID36=%s\n", peer.ToCid(adminPeerID).Encode(multibase.MustNewEncoder(multibase.Base36)))
 	fmt.Printf("ADMIN_PROOF_CLUSTER_ID=%s\n", *clusterID)
 	fmt.Printf("ADMIN_PROOF_PEER_ID=%s\n", adminPeerID.String())
 	fmt.Printf("ADMIN_PROOF_ROLE=admin\n")

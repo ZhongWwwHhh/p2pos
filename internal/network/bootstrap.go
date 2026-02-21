@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"p2pos/internal/config"
 
@@ -34,8 +35,7 @@ func NewConfigResolver(selfID peerstore.ID, provider InitConnectionsProvider, dn
 }
 
 func (r *ConfigResolver) Resolve(_ context.Context) ([]peerstore.AddrInfo, error) {
-	peers := make([]peerstore.AddrInfo, 0)
-	seen := make(map[peerstore.ID]struct{})
+	peersByID := make(map[peerstore.ID]*peerstore.AddrInfo)
 	var errs []error
 
 	cfg := r.provider.Get()
@@ -50,20 +50,19 @@ func (r *ConfigResolver) Resolve(_ context.Context) ([]peerstore.AddrInfo, error
 			if len(records) == 0 {
 				continue
 			}
-
-			peerInfo, err := ParseP2PAddr(records[0])
-			if err != nil {
-				errs = append(errs, fmt.Errorf("dns %s parse failed: %w", conn.Address, err))
-				continue
+			for _, record := range records {
+				for _, value := range parseTXTRecordValues(record) {
+					peerInfo, err := ParseP2PAddr(value)
+					if err != nil {
+						errs = append(errs, fmt.Errorf("dns %s parse failed for %q: %w", conn.Address, value, err))
+						continue
+					}
+					if peerInfo.ID == r.selfID {
+						continue
+					}
+					mergePeerAddrInfo(peersByID, peerInfo)
+				}
 			}
-			if peerInfo.ID == r.selfID {
-				continue
-			}
-			if _, ok := seen[peerInfo.ID]; ok {
-				continue
-			}
-			seen[peerInfo.ID] = struct{}{}
-			peers = append(peers, *peerInfo)
 		case "multiaddr":
 			peerInfo, err := ParseP2PAddr(conn.Address)
 			if err != nil {
@@ -73,17 +72,62 @@ func (r *ConfigResolver) Resolve(_ context.Context) ([]peerstore.AddrInfo, error
 			if peerInfo.ID == r.selfID {
 				continue
 			}
-			if _, ok := seen[peerInfo.ID]; ok {
-				continue
-			}
-			seen[peerInfo.ID] = struct{}{}
-			peers = append(peers, *peerInfo)
+			mergePeerAddrInfo(peersByID, peerInfo)
 		default:
 			continue
 		}
 	}
 
+	peers := make([]peerstore.AddrInfo, 0, len(peersByID))
+	for _, info := range peersByID {
+		peers = append(peers, *info)
+	}
+
 	return peers, errors.Join(errs...)
+}
+
+func mergePeerAddrInfo(dst map[peerstore.ID]*peerstore.AddrInfo, src *peerstore.AddrInfo) {
+	if src == nil || src.ID == "" {
+		return
+	}
+	existing, ok := dst[src.ID]
+	if !ok {
+		clone := &peerstore.AddrInfo{
+			ID:    src.ID,
+			Addrs: append([]multiaddr.Multiaddr(nil), src.Addrs...),
+		}
+		dst[src.ID] = clone
+		return
+	}
+	seen := make(map[string]struct{}, len(existing.Addrs))
+	for _, addr := range existing.Addrs {
+		seen[addr.String()] = struct{}{}
+	}
+	for _, addr := range src.Addrs {
+		key := addr.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		existing.Addrs = append(existing.Addrs, addr)
+	}
+}
+
+func parseTXTRecordValues(raw string) []string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(value, "dnsaddr=") {
+		value = strings.TrimSpace(strings.TrimPrefix(value, "dnsaddr="))
+	}
+	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") && len(value) >= 2 {
+		value = strings.TrimSpace(value[1 : len(value)-1])
+	}
+	if value == "" {
+		return nil
+	}
+	return []string{value}
 }
 
 func ParseP2PAddr(multiAddrStr string) (*peerstore.AddrInfo, error) {

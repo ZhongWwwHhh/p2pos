@@ -9,11 +9,9 @@
       <section class="card">
         <h2>Connection</h2>
         <label>Bootstrap Multiaddr</label>
-        <input v-model="bootstrapAddr" placeholder="/dns4/init.p2pos.zhongwwwhhh.cc/tcp/4100/p2p/..." />
+        <input v-model="bootstrapAddr" placeholder="/dnsaddr/init.p2pos.zhongwwwhhh.cc" />
         <div class="hint">Auto normalized: {{ normalizedBootstrapAddr || "-" }}</div>
-
-        <label>Cluster ID</label>
-        <input v-model="clusterId" placeholder="default" />
+        <div class="hint">Cluster: {{ clusterId }}</div>
 
         <div class="row">
           <button class="btn" :disabled="!canConnect" @click="connectNode">Connect</button>
@@ -29,16 +27,13 @@
       </section>
 
       <section class="card">
-        <h2>Admin Credentials</h2>
-        <label>Admin Node Private Key (base64)</label>
-        <textarea v-model="adminPrivKey" placeholder="Paste admin node private key"></textarea>
-
-        <label>Admin Proof (JSON)</label>
-        <textarea v-model="adminProofJson" placeholder='{"cluster_id":"...","peer_id":"...","role":"admin","valid_from":"...","valid_to":"...","sig":"..."}'></textarea>
+        <h2>Admin Bundle</h2>
+        <label>Config Bundle</label>
+        <textarea v-model="bundleInput" placeholder="p2pos-admin://..."></textarea>
 
         <div class="row">
-          <button class="btn" :disabled="!canLoadCreds" @click="loadCreds">Load Credentials</button>
-          <button class="btn secondary" @click="clearCreds">Clear</button>
+          <button class="btn" :disabled="!canLoadBundle" @click="loadBundle">Load Bundle</button>
+          <button class="btn secondary" @click="clearBundle">Clear</button>
         </div>
 
         <div v-if="credError" class="error">{{ credError }}</div>
@@ -85,11 +80,14 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { connect, createClient, pushMembershipSnapshot, type Libp2pClient } from "./libp2p";
+import { peerIdFromString } from "@libp2p/peer-id";
+import { base36 } from "multiformats/bases/base36";
 
 const bootstrapAddr = ref("/dns4/init.p2pos.zhongwwwhhh.cc/tcp/4100/p2p/");
 const clusterId = ref("default");
 const adminPrivKey = ref("");
 const adminProofJson = ref("");
+const bundleInput = ref("");
 const members = ref<string[]>([]);
 const newMember = ref("");
 const runtimeState = ref("unconfigured");
@@ -109,6 +107,14 @@ type AdminProof = {
   sig: string;
 };
 
+type AdminBundle = {
+  v: number;
+  cluster_id: string;
+  bootstrap: string;
+  admin_priv: string;
+  admin_proof: AdminProof;
+};
+
 const addMember = () => {
   const value = newMember.value.trim();
   if (!value) return;
@@ -124,17 +130,27 @@ const removeMember = (id: string) => {
   members.value = members.value.filter((item) => item !== id);
 };
 
-const canLoadCreds = computed(() => {
-  return adminPrivKey.value.trim().length > 0 && adminProofJson.value.trim().length > 0;
+const canLoadBundle = computed(() => {
+  return bundleInput.value.trim().length > 0;
 });
 
 const canPublish = computed(() => {
   return members.value.length > 0 && adminState.value !== "" && client.value !== null;
 });
 
-const loadCreds = () => {
+const loadBundle = () => {
   credError.value = "";
   adminState.value = "";
+  const parsed = parseBundle(bundleInput.value);
+  if (!parsed) {
+    credError.value = "Bundle invalid.";
+    return;
+  }
+  clusterId.value = parsed.cluster_id || "default";
+  bootstrapAddr.value = parsed.bootstrap || "";
+  adminPrivKey.value = parsed.admin_priv || "";
+  adminProofJson.value = JSON.stringify(parsed.admin_proof ?? {}, null, 2);
+
   const proof = parseAdminProof(adminProofJson.value);
   if (!proof) {
     credError.value = "Admin proof JSON invalid or missing fields.";
@@ -147,9 +163,12 @@ const loadCreds = () => {
   adminState.value = proof.peer_id;
 };
 
-const clearCreds = () => {
+const clearBundle = () => {
+  bundleInput.value = "";
   adminPrivKey.value = "";
   adminProofJson.value = "";
+  bootstrapAddr.value = "";
+  clusterId.value = "default";
   adminState.value = "";
   credError.value = "";
 };
@@ -195,7 +214,12 @@ const connectNode = async () => {
     if (!addr) {
       throw new Error("bootstrap address is empty");
     }
-    if (!addr.includes("/ws") && !addr.includes("/wss") && !addr.includes("/webtransport")) {
+    if (
+      !addr.startsWith("/dnsaddr/") &&
+      !addr.includes("/ws") &&
+      !addr.includes("/wss") &&
+      !addr.includes("/webtransport")
+    ) {
       throw new Error("bootstrap address must be ws/wss/webtransport for browser libp2p");
     }
     const node = await createClient(adminPrivKey.value.trim());
@@ -205,7 +229,7 @@ const connectNode = async () => {
     bootstrapAddr.value = addr;
     runtimeState.value = "connected";
   } catch (err) {
-    connectError.value = err instanceof Error ? err.message : "connect failed";
+    connectError.value = formatUnknownError(err, "connect failed");
   }
 };
 
@@ -227,7 +251,7 @@ const publishSnapshot = async () => {
     await pushMembershipSnapshot(client.value, addr, snapshotJson.value);
     runtimeState.value = "healthy";
   } catch (err) {
-    connectError.value = err instanceof Error ? err.message : "publish failed";
+    connectError.value = formatUnknownError(err, "publish failed");
   }
 };
 
@@ -274,6 +298,25 @@ function normalizeBootstrapAddr(raw: string): string {
     return value;
   }
 
+  // Convert /ip4/<ip>/tcp/<port>/p2p/<peer> into forge-compatible
+  // /ip4/<ip>/tcp/<port>/tls/sni/<escaped-ip>.<peer-cid36>.libp2p.direct/ws/p2p/<peer>
+  const ip4Match = value.match(/^\/ip4\/([^/]+)\/tcp\/(\d+)\/p2p\/([^/]+)$/);
+  if (ip4Match) {
+    const ip = ip4Match[1];
+    const port = ip4Match[2];
+    const peerID = ip4Match[3];
+    const escapedIP = ip.replaceAll(".", "-");
+    try {
+      const pid = peerIdFromString(peerID);
+      const peerCID36 = pid.toCID().toString(base36);
+      const sni = `${escapedIP}.${peerCID36}.libp2p.direct`;
+      return `/ip4/${ip}/tcp/${port}/tls/sni/${sni}/ws/p2p/${peerID}`;
+    } catch {
+      // Fallback to generic tls/ws if peer id parsing fails.
+      return `/ip4/${ip}/tcp/${port}/tls/ws/p2p/${peerID}`;
+    }
+  }
+
   // If user enters /dns4|dns6|ip4|ip6/.../tcp/<port>/p2p/<peer>, insert /tls/ws before /p2p.
   if (value.includes("/tcp/")) {
     if (value.includes("/p2p/")) {
@@ -287,5 +330,57 @@ function normalizeBootstrapAddr(raw: string): string {
   }
 
   return value;
+}
+
+function parseBundle(raw: string): AdminBundle | null {
+  const value = raw.trim();
+  if (!value) {
+    return null;
+  }
+
+  let jsonText = value;
+  if (value.startsWith("p2pos-admin://")) {
+    const payload = value.slice("p2pos-admin://".length);
+    try {
+      jsonText = atob(payload);
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const obj = JSON.parse(jsonText) as AdminBundle;
+    if (
+      !obj ||
+      typeof obj.v !== "number" ||
+      typeof obj.cluster_id !== "string" ||
+      typeof obj.bootstrap !== "string" ||
+      typeof obj.admin_priv !== "string" ||
+      typeof obj.admin_proof !== "object"
+    ) {
+      return null;
+    }
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+function formatUnknownError(err: unknown, fallback: string): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string" && err.trim() !== "") {
+    return err;
+  }
+  try {
+    const raw = JSON.stringify(err);
+    if (raw && raw !== "{}") {
+      return raw;
+    }
+  } catch {
+    // ignore
+  }
+  return fallback;
 }
 </script>

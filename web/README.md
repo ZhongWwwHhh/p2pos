@@ -4,7 +4,7 @@ Vue + Vite + Wrangler frontend for browser-side admin operations over libp2p.
 
 Current UI supports:
 - connect/disconnect to bootstrap peer via browser libp2p
-- load admin private key + admin proof
+- load a single `p2pos-admin://...` config bundle (bootstrap + cluster + admin credentials)
 - build membership snapshot JSON
 - push snapshot over `/p2pos/membership-push/1.0.0`
 
@@ -39,14 +39,17 @@ npm run deploy
 
 The worker serves static assets from `dist/` via the `ASSETS` binding (`wrangler.toml`).
 
-## Bootstrap Address Requirements
+## Bundle Import
 
-Browser libp2p requires browser transports. Your bootstrap multiaddr must contain:
-- `/ws`
-- `/wss`
-- or `/webtransport`
+Use the single bundle string printed by `install.sh` on first bootstrap install:
 
-The current UI enforces this at connect time.
+`p2pos-admin://<base64-json>`
+
+It contains:
+- bootstrap address
+- cluster id
+- admin private key
+- admin proof
 
 ## Recommended with Go Node
 

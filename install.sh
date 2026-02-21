@@ -14,6 +14,7 @@ SERVICE_NAME="p2pos"
 INSTALL_DIR="$(pwd)"
 CONFIG_FILE="${INSTALL_DIR}/config.json"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+INIT_DNS_DOMAIN="init.p2pos.zhongwwwhhh.cc"
 
 echo -e "${YELLOW}Starting P2POS installation...${NC}"
 
@@ -109,6 +110,7 @@ while IFS= read -r line; do
     case "$line" in
         NODE_PRIV_B64=*) NODE_PRIV_B64="${line#NODE_PRIV_B64=}" ;;
         NODE_PEER_ID=*) NODE_PEER_ID="${line#NODE_PEER_ID=}" ;;
+        NODE_PEER_CID36=*) NODE_PEER_CID36="${line#NODE_PEER_CID36=}" ;;
         SYSTEM_PRIV_B64=*) SYSTEM_PRIV_B64="${line#SYSTEM_PRIV_B64=}" ;;
         SYSTEM_PUB_B64=*) SYSTEM_PUB_B64="${line#SYSTEM_PUB_B64=}" ;;
         ADMIN_PRIV_B64=*) ADMIN_PRIV_B64="${line#ADMIN_PRIV_B64=}" ;;
@@ -138,7 +140,7 @@ cat > "${CONFIG_FILE}" << EOF
   "init_connections": [
     {
       "type": "dns",
-      "address": "init.p2pos.zhongwwwhhh.cc"
+      "address": "${INIT_DNS_DOMAIN}"
     }
   ],
   "listen": [
@@ -206,12 +208,7 @@ echo -e "${YELLOW}Config location: ${CONFIG_FILE}${NC}"
 echo ""
 echo -e "${YELLOW}Node peer_id: ${NODE_PEER_ID}${NC}"
 if [ -z "$INPUT_SYSTEM_PUB" ]; then
-    echo -e "${YELLOW}System public key:${NC} ${SYSTEM_PUB_B64}"
-    echo -e "${YELLOW}System private key:${NC} ${SYSTEM_PRIV_B64}"
-    echo -e "${YELLOW}Admin node private key:${NC} ${ADMIN_PRIV_B64}"
-    echo -e "${YELLOW}Admin peer_id:${NC} ${ADMIN_PEER_ID}"
-    echo -e "${YELLOW}Admin proof:${NC}"
-    cat << EOF
+    ADMIN_PROOF_JSON=$(cat << EOF
 {
   "cluster_id": "${ADMIN_PROOF_CLUSTER_ID}",
   "peer_id": "${ADMIN_PROOF_PEER_ID}",
@@ -221,6 +218,38 @@ if [ -z "$INPUT_SYSTEM_PUB" ]; then
   "sig": "${ADMIN_PROOF_SIG}"
 }
 EOF
+)
+
+    WEBADMIN_JSON=$(cat << EOF
+{"v":1,"cluster_id":"${INPUT_CLUSTER}","bootstrap":"/dnsaddr/${INIT_DNS_DOMAIN}","admin_priv":"${ADMIN_PRIV_B64}","admin_proof":${ADMIN_PROOF_JSON}}
+EOF
+)
+    WEBADMIN_BUNDLE="p2pos-admin://$(printf '%s' "${WEBADMIN_JSON}" | base64 -w0)"
+
+    PUBLIC_IPV4=$(curl -fsS --max-time 3 https://api.ipify.org || true)
+    if [ -z "${PUBLIC_IPV4}" ]; then
+        PUBLIC_IPV4="<PUBLIC_IPV4>"
+        ESCAPED_IPV4="<PUBLIC_IPV4_ESCAPED_WITH_DASH>"
+    else
+        ESCAPED_IPV4="${PUBLIC_IPV4//./-}"
+    fi
+
+    TXT_TCP="dnsaddr=/ip4/${PUBLIC_IPV4}/tcp/4100/p2p/${NODE_PEER_ID}"
+    TXT_TLS="dnsaddr=/ip4/${PUBLIC_IPV4}/tcp/4101/tls/sni/${ESCAPED_IPV4}.${NODE_PEER_CID36}.libp2p.direct/ws/p2p/${NODE_PEER_ID}"
+
+    echo -e "${YELLOW}System public key:${NC} ${SYSTEM_PUB_B64}"
+    echo -e "${YELLOW}System private key:${NC} ${SYSTEM_PRIV_B64}"
+    echo -e "${YELLOW}Admin node private key:${NC} ${ADMIN_PRIV_B64}"
+    echo -e "${YELLOW}Admin peer_id:${NC} ${ADMIN_PEER_ID}"
+    echo -e "${YELLOW}Admin proof:${NC}"
+    printf "%s\n" "${ADMIN_PROOF_JSON}"
+    echo ""
+    echo -e "${YELLOW}Bootstrap DNS TXT records for ${INIT_DNS_DOMAIN}:${NC}"
+    echo "${TXT_TCP}"
+    echo "${TXT_TLS}"
+    echo ""
+    echo -e "${YELLOW}Web Admin bundle (single input in UI):${NC}"
+    echo "${WEBADMIN_BUNDLE}"
 fi
 echo -e "${YELLOW}Service management commands:${NC}"
 echo "  systemctl status p2pos       - Check service status"
