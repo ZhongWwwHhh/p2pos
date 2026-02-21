@@ -126,8 +126,10 @@ EOF
 
 if [ -z "$INPUT_SYSTEM_PUB" ]; then
     SYSTEM_PUB_KEY="${SYSTEM_PUB_B64}"
+    AUTO_TLS_MODE="on"
 else
     SYSTEM_PUB_KEY="${INPUT_SYSTEM_PUB}"
+    AUTO_TLS_MODE="auto"
 fi
 
 echo -e "${YELLOW}Generating config.json...${NC}"
@@ -144,7 +146,7 @@ cat > "${CONFIG_FILE}" << EOF
     "[::]:4100"
   ],
   "auto_tls": {
-    "mode": "auto",
+    "mode": "${AUTO_TLS_MODE}",
     "user_email": "",
     "cache_dir": ".autotls-cache",
     "forge_auth": ""

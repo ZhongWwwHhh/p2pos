@@ -106,7 +106,7 @@ Minimal config:
 
 `auto_tls.mode` values:
 - `auto` (default): automatically enable AutoTLS when node is detected as public
-- `on`: force enable AutoTLS
+- `on`: force enable AutoTLS and attempt cert flow immediately (for first bootstrap node cold-start)
 - `off`: force disable AutoTLS
 
 Notes:

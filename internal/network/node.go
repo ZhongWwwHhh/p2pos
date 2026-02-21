@@ -26,6 +26,8 @@ import (
 	peerstore "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
+	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
+	libp2ptcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/libp2p/go-libp2p/p2p/transport/websocket"
 	multiaddr "github.com/multiformats/go-multiaddr"
 )
@@ -73,16 +75,16 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 	var autoTLSMgr *p2pforge.P2PForgeCertMgr
 	switch strings.ToLower(strings.TrimSpace(cfg.AutoTLSMode())) {
 	case "on":
-		autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions)
+		autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions, true)
 	case "auto":
 		if enablePublicService {
-			autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions)
+			autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions, false)
 		}
 	case "off":
 		// disabled explicitly
 	default:
 		if enablePublicService {
-			autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions)
+			autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions, false)
 		}
 	}
 	if err != nil {
@@ -150,6 +152,8 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 		libp2p.NATPortMap(),
 		libp2p.EnableAutoRelayWithPeerSource(autorelay.PeerSource(relayPeerSource)),
 		libp2p.EnableHolePunching(),
+		libp2p.Transport(libp2ptcp.NewTCPTransport),
+		libp2p.Transport(libp2pquic.NewTransport),
 		libp2p.Transport(websocket.New, wsOptions...),
 	}
 	if autoTLSMgr != nil {
@@ -203,12 +207,17 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 	return n, nil
 }
 
-func createAutoTLSManager(cfg ListenProvider, listenAddrs *[]string, wsOptions *[]interface{}) (*p2pforge.P2PForgeCertMgr, error) {
+func createAutoTLSManager(cfg ListenProvider, listenAddrs *[]string, wsOptions *[]interface{}, force bool) (*p2pforge.P2PForgeCertMgr, error) {
 	autoTLSOpts := []p2pforge.P2PForgeCertMgrOptions{
 		p2pforge.WithUserEmail(cfg.AutoTLSUserEmail()),
 		p2pforge.WithCertificateStorage(&certmagic.FileStorage{
 			Path: cfg.AutoTLSCacheDir(),
 		}),
+	}
+	if force {
+		// In force mode (auto_tls.mode=on), attempt certificate flow immediately
+		// without waiting for reachability events. Useful for first bootstrap node.
+		autoTLSOpts = append(autoTLSOpts, p2pforge.WithAllowPrivateForgeAddrs())
 	}
 	forgeAuth := strings.TrimSpace(cfg.AutoTLSForgeAuth())
 	if forgeAuth != "" {
@@ -220,7 +229,10 @@ func createAutoTLSManager(cfg ListenProvider, listenAddrs *[]string, wsOptions *
 	}
 	*listenAddrs = append(*listenAddrs, autoTLSMgr.AddrStrings()...)
 	*wsOptions = append(*wsOptions, websocket.WithTLSConfig(autoTLSMgr.TLSConfig()))
-	logging.Log("NODE", "autotls_enabled", map[string]string{"forge_domain": p2pforge.DefaultForgeDomain})
+	logging.Log("NODE", "autotls_enabled", map[string]string{
+		"forge_domain": p2pforge.DefaultForgeDomain,
+		"mode":         cfg.AutoTLSMode(),
+	})
 	return autoTLSMgr, nil
 }
 
