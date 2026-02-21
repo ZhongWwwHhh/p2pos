@@ -16,6 +16,8 @@ import (
 	"p2pos/internal/membership"
 	"p2pos/internal/status"
 
+	"github.com/caddyserver/certmagic"
+	p2pforge "github.com/ipshipyard/p2p-forge/client"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	libp2pevent "github.com/libp2p/go-libp2p/core/event"
@@ -24,6 +26,7 @@ import (
 	peerstore "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
+	"github.com/libp2p/go-libp2p/p2p/transport/websocket"
 	multiaddr "github.com/multiformats/go-multiaddr"
 )
 
@@ -39,6 +42,7 @@ type Node struct {
 	status      StatusProvider
 	privKey     crypto.PrivKey
 	adminProof  *membership.AdminProof
+	autoTLSMgr  *p2pforge.P2PForgeCertMgr
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -47,6 +51,10 @@ type ListenProvider interface {
 	ListenAddresses() []string
 	NodePrivateKey() crypto.PrivKey
 	NetworkMode() string
+	AutoTLSEnabled() bool
+	AutoTLSUserEmail() string
+	AutoTLSCacheDir() string
+	AutoTLSForgeAuth() string
 }
 
 type StatusProvider interface {
@@ -59,6 +67,27 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 	listenAddrs, err := buildListenMultiaddrs(cfg.ListenAddresses())
 	if err != nil {
 		return nil, err
+	}
+	wsOptions := []interface{}{}
+	var autoTLSMgr *p2pforge.P2PForgeCertMgr
+	if cfg.AutoTLSEnabled() {
+		autoTLSOpts := []p2pforge.P2PForgeCertMgrOptions{
+			p2pforge.WithUserEmail(cfg.AutoTLSUserEmail()),
+			p2pforge.WithCertificateStorage(&certmagic.FileStorage{
+				Path: cfg.AutoTLSCacheDir(),
+			}),
+		}
+		forgeAuth := strings.TrimSpace(cfg.AutoTLSForgeAuth())
+		if forgeAuth != "" {
+			autoTLSOpts = append(autoTLSOpts, p2pforge.WithForgeAuth(forgeAuth))
+		}
+		autoTLSMgr, err = p2pforge.NewP2PForgeCertMgr(autoTLSOpts...)
+		if err != nil {
+			return nil, err
+		}
+		listenAddrs = append(listenAddrs, autoTLSMgr.AddrStrings()...)
+		wsOptions = append(wsOptions, websocket.WithTLSConfig(autoTLSMgr.TLSConfig()))
+		logging.Log("NODE", "autotls_enabled", map[string]string{"forge_domain": p2pforge.DefaultForgeDomain})
 	}
 
 	privKey := cfg.NodePrivateKey()
@@ -119,6 +148,10 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 		libp2p.NATPortMap(),
 		libp2p.EnableAutoRelayWithPeerSource(autorelay.PeerSource(relayPeerSource)),
 		libp2p.EnableHolePunching(),
+		libp2p.Transport(websocket.New, wsOptions...),
+	}
+	if autoTLSMgr != nil {
+		opts = append(opts, libp2p.AddrsFactory(autoTLSMgr.AddressFactory()))
 	}
 	if enablePublicService {
 		opts = append(opts, libp2p.EnableNATService(), libp2p.EnableRelayService())
@@ -138,9 +171,17 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 		Tracker:     NewTracker(),
 		bus:         bus,
 		privKey:     privKey,
+		autoTLSMgr:  autoTLSMgr,
 		state: stateHolder{
 			state: RuntimeStateUnconfigured,
 		},
+	}
+	if autoTLSMgr != nil {
+		autoTLSMgr.ProvideHost(hostNode)
+		if err := autoTLSMgr.Start(); err != nil {
+			hostNode.Close()
+			return nil, err
+		}
 	}
 	if enablePublicService {
 		logging.Log("NODE", "network_mode", map[string]string{
@@ -265,6 +306,9 @@ func tuneQUICUDPBuffer() {
 
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
+		if n.autoTLSMgr != nil {
+			n.autoTLSMgr.Stop()
+		}
 		n.closeErr = n.Host.Close()
 	})
 	return n.closeErr
@@ -496,15 +540,18 @@ func buildListenMultiaddrs(listens []string) ([]string, error) {
 
 			var tcpAddr string
 			var quicAddr string
+			var wsAddr string
 			if ip.To4() != nil {
 				tcpAddr = fmt.Sprintf("/ip4/%s/tcp/%s", host, port)
 				quicAddr = fmt.Sprintf("/ip4/%s/udp/%s/quic-v1", host, port)
+				wsAddr = fmt.Sprintf("/ip4/%s/tcp/%s/ws", host, port)
 			} else {
 				tcpAddr = fmt.Sprintf("/ip6/%s/tcp/%s", host, port)
 				quicAddr = fmt.Sprintf("/ip6/%s/udp/%s/quic-v1", host, port)
+				wsAddr = fmt.Sprintf("/ip6/%s/tcp/%s/ws", host, port)
 			}
 
-			for _, addr := range []string{tcpAddr, quicAddr} {
+			for _, addr := range []string{tcpAddr, quicAddr, wsAddr} {
 				if _, ok := seen[addr]; ok {
 					continue
 				}

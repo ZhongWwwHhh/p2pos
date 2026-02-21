@@ -1,0 +1,30 @@
+{
+  "name": "p2pos-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "latest",
+    "@libp2p/crypto": "latest",
+    "@libp2p/mplex": "latest",
+    "@libp2p/peer-id": "latest",
+    "@libp2p/websockets": "latest",
+    "@multiformats/multiaddr": "latest",
+    "it-pipe": "latest",
+    "libp2p": "latest",
+    "uint8arrays": "latest",
+    "vue": "^3.4.38"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.2",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.5",
+    "wrangler": "^3.86.1"
+  }
+}

@@ -139,6 +139,16 @@ cat > "${CONFIG_FILE}" << EOF
       "address": "init.p2pos.zhongwwwhhh.cc"
     }
   ],
+  "listen": [
+    "0.0.0.0:4100",
+    "[::]:4100"
+  ],
+  "auto_tls": {
+    "enabled": false,
+    "user_email": "",
+    "cache_dir": ".autotls-cache",
+    "forge_auth": ""
+  },
   "cluster_id": "${INPUT_CLUSTER}",
   "system_pubkey": "${SYSTEM_PUB_KEY}",
   "members": [],

@@ -19,15 +19,23 @@ import (
 )
 
 type Config struct {
-	InitConnections []Connection `json:"init_connections"`
-	Listen          ListenConfig `json:"listen"`
-	NetworkMode     string       `json:"network_mode"`
-	UpdateFeedURL   string       `json:"update_feed_url"`
-	NodePrivateKey  string       `json:"node_private_key"`
-	ClusterID       string       `json:"cluster_id"`
-	SystemPubKey    string       `json:"system_pubkey"`
-	AdminProof      AdminProof   `json:"admin_proof"`
-	Members         []string     `json:"members"`
+	InitConnections []Connection  `json:"init_connections"`
+	Listen          ListenConfig  `json:"listen"`
+	NetworkMode     string        `json:"network_mode"`
+	AutoTLS         AutoTLSConfig `json:"auto_tls"`
+	UpdateFeedURL   string        `json:"update_feed_url"`
+	NodePrivateKey  string        `json:"node_private_key"`
+	ClusterID       string        `json:"cluster_id"`
+	SystemPubKey    string        `json:"system_pubkey"`
+	AdminProof      AdminProof    `json:"admin_proof"`
+	Members         []string      `json:"members"`
+}
+
+type AutoTLSConfig struct {
+	Enabled   bool   `json:"enabled"`
+	UserEmail string `json:"user_email"`
+	CacheDir  string `json:"cache_dir"`
+	ForgeAuth string `json:"forge_auth"`
 }
 
 type AdminProof struct {
@@ -81,6 +89,7 @@ const defaultConfigPath = "config.json"
 const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
 const defaultNetworkMode = "auto"
 const defaultClusterID = "default"
+const defaultAutoTLSCacheDir = ".autotls-cache"
 
 func NewStore(bus *events.Bus) *Store {
 	return &Store{
@@ -94,6 +103,7 @@ func Default() Config {
 	return Config{
 		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
 		NetworkMode:   defaultNetworkMode,
+		AutoTLS:       AutoTLSConfig{Enabled: false, CacheDir: defaultAutoTLSCacheDir},
 		UpdateFeedURL: defaultUpdateFeedURL,
 		ClusterID:     defaultClusterID,
 	}
@@ -150,6 +160,30 @@ func (s *Store) NetworkMode() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg.NetworkMode
+}
+
+func (s *Store) AutoTLSEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.AutoTLS.Enabled
+}
+
+func (s *Store) AutoTLSUserEmail() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.AutoTLS.UserEmail
+}
+
+func (s *Store) AutoTLSCacheDir() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.AutoTLS.CacheDir
+}
+
+func (s *Store) AutoTLSForgeAuth() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.AutoTLS.ForgeAuth
 }
 
 func (s *Store) AdminProof() (*membership.AdminProof, bool, error) {
@@ -229,6 +263,12 @@ func normalize(cfg Config) Config {
 	if cfg.ClusterID == "" {
 		cfg.ClusterID = defaultClusterID
 	}
+	cfg.AutoTLS.UserEmail = strings.TrimSpace(cfg.AutoTLS.UserEmail)
+	cfg.AutoTLS.CacheDir = strings.TrimSpace(cfg.AutoTLS.CacheDir)
+	cfg.AutoTLS.ForgeAuth = strings.TrimSpace(cfg.AutoTLS.ForgeAuth)
+	if cfg.AutoTLS.CacheDir == "" {
+		cfg.AutoTLS.CacheDir = defaultAutoTLSCacheDir
+	}
 	cfg.Members = dedupeTrimmed(cfg.Members)
 	return cfg
 }
@@ -238,6 +278,7 @@ func copyConfig(cfg Config) Config {
 		InitConnections: make([]Connection, len(cfg.InitConnections)),
 		Listen:          append(ListenConfig(nil), cfg.Listen...),
 		NetworkMode:     cfg.NetworkMode,
+		AutoTLS:         cfg.AutoTLS,
 		UpdateFeedURL:   cfg.UpdateFeedURL,
 		NodePrivateKey:  cfg.NodePrivateKey,
 		ClusterID:       cfg.ClusterID,

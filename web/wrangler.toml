@@ -1,0 +1,7 @@
+name = "p2pos-web"
+compatibility_date = "2025-02-21"
+main = "worker.js"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
