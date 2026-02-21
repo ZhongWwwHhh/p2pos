@@ -144,7 +144,7 @@ cat > "${CONFIG_FILE}" << EOF
     "[::]:4100"
   ],
   "auto_tls": {
-    "enabled": false,
+    "mode": "auto",
     "user_email": "",
     "cache_dir": ".autotls-cache",
     "forge_auth": ""

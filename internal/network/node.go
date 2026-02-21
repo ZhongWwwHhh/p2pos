@@ -51,7 +51,7 @@ type ListenProvider interface {
 	ListenAddresses() []string
 	NodePrivateKey() crypto.PrivKey
 	NetworkMode() string
-	AutoTLSEnabled() bool
+	AutoTLSMode() string
 	AutoTLSUserEmail() string
 	AutoTLSCacheDir() string
 	AutoTLSForgeAuth() string
@@ -68,34 +68,36 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	enablePublicService := shouldEnablePublicService(cfg.NetworkMode())
 	wsOptions := []interface{}{}
 	var autoTLSMgr *p2pforge.P2PForgeCertMgr
-	if cfg.AutoTLSEnabled() {
-		autoTLSOpts := []p2pforge.P2PForgeCertMgrOptions{
-			p2pforge.WithUserEmail(cfg.AutoTLSUserEmail()),
-			p2pforge.WithCertificateStorage(&certmagic.FileStorage{
-				Path: cfg.AutoTLSCacheDir(),
-			}),
+	switch strings.ToLower(strings.TrimSpace(cfg.AutoTLSMode())) {
+	case "on":
+		autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions)
+	case "auto":
+		if enablePublicService {
+			autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions)
 		}
-		forgeAuth := strings.TrimSpace(cfg.AutoTLSForgeAuth())
-		if forgeAuth != "" {
-			autoTLSOpts = append(autoTLSOpts, p2pforge.WithForgeAuth(forgeAuth))
+	case "off":
+		// disabled explicitly
+	default:
+		if enablePublicService {
+			autoTLSMgr, err = createAutoTLSManager(cfg, &listenAddrs, &wsOptions)
 		}
-		autoTLSMgr, err = p2pforge.NewP2PForgeCertMgr(autoTLSOpts...)
-		if err != nil {
-			return nil, err
-		}
-		listenAddrs = append(listenAddrs, autoTLSMgr.AddrStrings()...)
-		wsOptions = append(wsOptions, websocket.WithTLSConfig(autoTLSMgr.TLSConfig()))
-		logging.Log("NODE", "autotls_enabled", map[string]string{"forge_domain": p2pforge.DefaultForgeDomain})
+	}
+	if err != nil {
+		return nil, err
+	}
+	if autoTLSMgr == nil {
+		logging.Log("NODE", "autotls_disabled", map[string]string{
+			"mode": cfg.AutoTLSMode(),
+		})
 	}
 
 	privKey := cfg.NodePrivateKey()
 	if privKey == nil {
 		return nil, fmt.Errorf("node private key is not initialized")
 	}
-
-	enablePublicService := shouldEnablePublicService(cfg.NetworkMode())
 
 	var hostRef struct {
 		mu sync.RWMutex
@@ -199,6 +201,27 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 	n.registerStatusHandler()
 	n.startReachabilityWatcher()
 	return n, nil
+}
+
+func createAutoTLSManager(cfg ListenProvider, listenAddrs *[]string, wsOptions *[]interface{}) (*p2pforge.P2PForgeCertMgr, error) {
+	autoTLSOpts := []p2pforge.P2PForgeCertMgrOptions{
+		p2pforge.WithUserEmail(cfg.AutoTLSUserEmail()),
+		p2pforge.WithCertificateStorage(&certmagic.FileStorage{
+			Path: cfg.AutoTLSCacheDir(),
+		}),
+	}
+	forgeAuth := strings.TrimSpace(cfg.AutoTLSForgeAuth())
+	if forgeAuth != "" {
+		autoTLSOpts = append(autoTLSOpts, p2pforge.WithForgeAuth(forgeAuth))
+	}
+	autoTLSMgr, err := p2pforge.NewP2PForgeCertMgr(autoTLSOpts...)
+	if err != nil {
+		return nil, err
+	}
+	*listenAddrs = append(*listenAddrs, autoTLSMgr.AddrStrings()...)
+	*wsOptions = append(*wsOptions, websocket.WithTLSConfig(autoTLSMgr.TLSConfig()))
+	logging.Log("NODE", "autotls_enabled", map[string]string{"forge_domain": p2pforge.DefaultForgeDomain})
+	return autoTLSMgr, nil
 }
 
 func shouldEnablePublicService(mode string) bool {

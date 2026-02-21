@@ -62,7 +62,7 @@ Example `config.json`:
   "listen": ["0.0.0.0:4100", "[::]:4100"],
   "network_mode": "auto",
   "auto_tls": {
-    "enabled": false,
+    "mode": "auto",
     "user_email": "",
     "cache_dir": ".autotls-cache",
     "forge_auth": ""
@@ -87,7 +87,7 @@ Example `config.json`:
 
 Current implementation uses official `p2p-forge/client` integration.
 
-When `auto_tls.enabled=true`, node startup will:
+When AutoTLS is active (`auto_tls.mode` resolves to `on`), node startup will:
 - create forge cert manager
 - add forge-managed WSS listen addresses
 - use forge TLS config for websocket transport
@@ -97,12 +97,17 @@ Minimal config:
 
 ```json
 "auto_tls": {
-  "enabled": true,
+  "mode": "auto",
   "user_email": "ops@example.com",
   "cache_dir": ".autotls-cache",
   "forge_auth": ""
 }
 ```
+
+`auto_tls.mode` values:
+- `auto` (default): automatically enable AutoTLS when node is detected as public
+- `on`: force enable AutoTLS
+- `off`: force disable AutoTLS
 
 Notes:
 - `forge_auth` is optional. Set it only if your forge registration endpoint requires access token.

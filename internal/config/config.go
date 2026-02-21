@@ -32,6 +32,7 @@ type Config struct {
 }
 
 type AutoTLSConfig struct {
+	Mode      string `json:"mode"`
 	Enabled   bool   `json:"enabled"`
 	UserEmail string `json:"user_email"`
 	CacheDir  string `json:"cache_dir"`
@@ -90,6 +91,7 @@ const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/Ops-Syste
 const defaultNetworkMode = "auto"
 const defaultClusterID = "default"
 const defaultAutoTLSCacheDir = ".autotls-cache"
+const defaultAutoTLSMode = "auto"
 
 func NewStore(bus *events.Bus) *Store {
 	return &Store{
@@ -103,7 +105,7 @@ func Default() Config {
 	return Config{
 		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
 		NetworkMode:   defaultNetworkMode,
-		AutoTLS:       AutoTLSConfig{Enabled: false, CacheDir: defaultAutoTLSCacheDir},
+		AutoTLS:       AutoTLSConfig{Mode: defaultAutoTLSMode, CacheDir: defaultAutoTLSCacheDir},
 		UpdateFeedURL: defaultUpdateFeedURL,
 		ClusterID:     defaultClusterID,
 	}
@@ -162,10 +164,10 @@ func (s *Store) NetworkMode() string {
 	return s.cfg.NetworkMode
 }
 
-func (s *Store) AutoTLSEnabled() bool {
+func (s *Store) AutoTLSMode() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg.AutoTLS.Enabled
+	return s.cfg.AutoTLS.Mode
 }
 
 func (s *Store) AutoTLSUserEmail() string {
@@ -266,6 +268,20 @@ func normalize(cfg Config) Config {
 	cfg.AutoTLS.UserEmail = strings.TrimSpace(cfg.AutoTLS.UserEmail)
 	cfg.AutoTLS.CacheDir = strings.TrimSpace(cfg.AutoTLS.CacheDir)
 	cfg.AutoTLS.ForgeAuth = strings.TrimSpace(cfg.AutoTLS.ForgeAuth)
+	autoTLSMode := strings.ToLower(strings.TrimSpace(cfg.AutoTLS.Mode))
+	switch autoTLSMode {
+	case "on", "off", "auto":
+		cfg.AutoTLS.Mode = autoTLSMode
+	case "":
+		// Backward compatibility for legacy boolean field.
+		if cfg.AutoTLS.Enabled {
+			cfg.AutoTLS.Mode = "on"
+		} else {
+			cfg.AutoTLS.Mode = defaultAutoTLSMode
+		}
+	default:
+		cfg.AutoTLS.Mode = defaultAutoTLSMode
+	}
 	if cfg.AutoTLS.CacheDir == "" {
 		cfg.AutoTLS.CacheDir = defaultAutoTLSCacheDir
 	}

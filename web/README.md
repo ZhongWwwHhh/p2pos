@@ -51,7 +51,7 @@ The current UI enforces this at connect time.
 ## Recommended with Go Node
 
 Use Go node with official AutoTLS enabled:
-- node side: `auto_tls.enabled=true`
+- node side: `auto_tls.mode=auto` (or `on`)
 - browser side: dial forge-backed `wss` address
 
 This gives stable browser connectivity without manual certificate management.
