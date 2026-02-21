@@ -70,15 +70,27 @@ echo -e "${GREEN}Binary downloaded and made executable${NC}"
 
 echo -e "${YELLOW}Config setup...${NC}"
 
-read -r -p "Enter system_pubkey (leave empty to create new system): " INPUT_SYSTEM_PUB
-read -r -p "Enter cluster_id (default: default): " INPUT_CLUSTER
+prompt() {
+    local message="$1"
+    if [ ! -t 0 ] && [ ! -t 1 ] && [ ! -t 2 ]; then
+        echo -e "${RED}Error: no TTY available for interactive input.${NC}"
+        echo -e "${YELLOW}Run: sudo bash install.sh (not via pipe)${NC}"
+        exit 1
+    fi
+    printf "%s" "$message" > /dev/tty
+    IFS= read -r reply < /dev/tty
+    printf "%s" "$reply"
+}
+
+INPUT_SYSTEM_PUB=$(prompt "Enter system_pubkey (leave empty to create new system): ")
+INPUT_CLUSTER=$(prompt "Enter cluster_id (default: default): ")
 if [ -z "$INPUT_CLUSTER" ]; then
     INPUT_CLUSTER="default"
 fi
 
 if [ -z "$INPUT_SYSTEM_PUB" ]; then
     echo -e "${YELLOW}Creating new system keys and admin proof...${NC}"
-    read -r -p "Admin proof valid_to (RFC3339, default: 9999-12-31T00:00:00Z): " INPUT_VALID_TO
+    INPUT_VALID_TO=$(prompt "Admin proof valid_to (RFC3339, default: 9999-12-31T00:00:00Z): ")
     if [ -z "$INPUT_VALID_TO" ]; then
         INPUT_VALID_TO="9999-12-31T00:00:00Z"
     fi
@@ -93,7 +105,24 @@ if echo "${KEYGEN_OUTPUT}" | grep -q "^ERR="; then
     exit 1
 fi
 
-eval "${KEYGEN_OUTPUT}"
+while IFS= read -r line; do
+    case "$line" in
+        NODE_PRIV_B64=*) NODE_PRIV_B64="${line#NODE_PRIV_B64=}" ;;
+        NODE_PEER_ID=*) NODE_PEER_ID="${line#NODE_PEER_ID=}" ;;
+        SYSTEM_PRIV_B64=*) SYSTEM_PRIV_B64="${line#SYSTEM_PRIV_B64=}" ;;
+        SYSTEM_PUB_B64=*) SYSTEM_PUB_B64="${line#SYSTEM_PUB_B64=}" ;;
+        ADMIN_PRIV_B64=*) ADMIN_PRIV_B64="${line#ADMIN_PRIV_B64=}" ;;
+        ADMIN_PEER_ID=*) ADMIN_PEER_ID="${line#ADMIN_PEER_ID=}" ;;
+        ADMIN_PROOF_CLUSTER_ID=*) ADMIN_PROOF_CLUSTER_ID="${line#ADMIN_PROOF_CLUSTER_ID=}" ;;
+        ADMIN_PROOF_PEER_ID=*) ADMIN_PROOF_PEER_ID="${line#ADMIN_PROOF_PEER_ID=}" ;;
+        ADMIN_PROOF_ROLE=*) ADMIN_PROOF_ROLE="${line#ADMIN_PROOF_ROLE=}" ;;
+        ADMIN_PROOF_VALID_FROM=*) ADMIN_PROOF_VALID_FROM="${line#ADMIN_PROOF_VALID_FROM=}" ;;
+        ADMIN_PROOF_VALID_TO=*) ADMIN_PROOF_VALID_TO="${line#ADMIN_PROOF_VALID_TO=}" ;;
+        ADMIN_PROOF_SIG=*) ADMIN_PROOF_SIG="${line#ADMIN_PROOF_SIG=}" ;;
+    esac
+done << EOF
+${KEYGEN_OUTPUT}
+EOF
 
 if [ -z "$INPUT_SYSTEM_PUB" ]; then
     SYSTEM_PUB_KEY="${SYSTEM_PUB_B64}"
