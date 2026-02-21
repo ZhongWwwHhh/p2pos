@@ -127,6 +127,11 @@ textarea {
   font-size: 13px;
 }
 
+.list-remove-btn {
+  padding: 6px 10px;
+  min-width: 72px;
+}
+
 .status {
   display: inline-flex;
   align-items: center;
@@ -151,6 +156,33 @@ textarea {
   color: #fca5a5;
   font-size: 12px;
   margin-top: 8px;
+}
+
+.status-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.status-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.status-table th,
+.status-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.status-table th {
+  color: var(--muted);
+  background: #0f151d;
+  position: sticky;
+  top: 0;
 }
 
 @media (max-width: 720px) {

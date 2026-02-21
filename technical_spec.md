@@ -59,7 +59,6 @@
   - `user_email`, `forge_auth`: optional
 - `cluster_id`: string
 - `system_pubkey`: base64（可为空）
-- `members`: `[]peer_id`
 - `admin_proof`
   - `cluster_id`, `peer_id`, `role`, `valid_from`, `valid_to`, `sig`
 - `node_private_key`: base64
@@ -69,7 +68,16 @@
 - `network_mode` 非法值回退 `auto`。
 - `auto_tls.mode` 非法值回退 `auto`。
 - `auto_tls.port` 非法值回退 `4101`。
-- `members` 去空白、去重。
+- 成员列表不存储在 `config.json`，由 `peers` 表维护。
+
+### 3.1 成员存储（peers 表）
+
+- `peers` 表是当前 membership 的唯一持久化来源。
+- 约束：`peers.peer_id` 集合必须等于当前 snapshot 的 `members` 集合。
+- 应用新 snapshot 后执行同步：
+  - 删除不在 `members` 内的行。
+  - 对缺失成员补行（默认 `reachability=offline`）。
+- presence/heartbeat/status 仅更新已有成员行，不得新增非成员行。
 
 ## 4. 状态机规范
 

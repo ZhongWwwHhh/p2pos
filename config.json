@@ -19,7 +19,6 @@
   "update_channel": "stable",
   "cluster_id": "default",
   "system_pubkey": "",
-  "members": [],
   "admin_proof": {
     "cluster_id": "",
     "peer_id": "",

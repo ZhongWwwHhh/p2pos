@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"p2pos/internal/logging"
@@ -135,10 +136,20 @@ func (n *Node) ClusterStatus(ctx context.Context) ([]status.Record, error) {
 	all = append(all, local...)
 
 	for _, peerID := range n.Host.Network().Peers() {
+		if _, skip := n.statusUnsupported.Load(peerID); skip {
+			continue
+		}
 		reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		remote, err := n.FetchStatus(reqCtx, peerID, string(statusScopeLocal))
 		cancel()
 		if err != nil {
+			if strings.Contains(err.Error(), "protocols not supported") {
+				n.statusUnsupported.Store(peerID, struct{}{})
+				logging.Log("STATUS", "skip_unsupported_peer", map[string]string{
+					"peer_id": peerID.String(),
+				})
+				continue
+			}
 			logging.Log("STATUS", "query_failed", map[string]string{
 				"peer_id": peerID.String(),
 				"reason":  err.Error(),

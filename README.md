@@ -74,7 +74,6 @@ Example `config.json`:
   "update_channel": "stable",
   "cluster_id": "default",
   "system_pubkey": "",
-  "members": [],
   "admin_proof": {
     "cluster_id": "",
     "peer_id": "",
@@ -96,6 +95,10 @@ Example `config.json`:
 - 正式版：`YYYYMMDD-HHMM`
 - 开发预发布：`YYYYMMDD-HHMM-dev`
 - 自动更新比较会按时间版本解析；同一时间戳下正式版高于 `-dev`。
+
+成员存储说明：
+- `config.json` 不再保存成员列表。
+- `sqlite.db` 的 `peers` 表即当前 membership 成员集合（按 snapshot 同步）。
 
 ## Bootstrap DNS TXT
 

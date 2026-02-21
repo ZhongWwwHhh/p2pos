@@ -98,6 +98,7 @@ func (n *Node) SyncMembership(ctx context.Context) error {
 		}
 		after := manager.Snapshot().IssuedAt
 		if after.After(before) {
+			n.notifyMembershipApplied(manager.Snapshot())
 			logging.Log("MEMBERSHIP", "apply_snapshot", map[string]string{
 				"peer_id":   peerID.String(),
 				"issued_at": after.UTC().Format(time.RFC3339Nano),

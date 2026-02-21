@@ -157,7 +157,6 @@ cat > "${CONFIG_FILE}" << EOF
   "update_channel": "stable",
   "cluster_id": "${INPUT_CLUSTER}",
   "system_pubkey": "${SYSTEM_PUB_KEY}",
-  "members": [],
   "admin_proof": {
     "cluster_id": "",
     "peer_id": "",
