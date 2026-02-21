@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"p2pos/internal/events"
@@ -273,27 +275,74 @@ func NewPeerRepository() *PeerRepository {
 	return &PeerRepository{}
 }
 
-func (r *PeerRepository) UpsertLastSeen(_ context.Context, peerID, remoteAddr, observedBy, reachability string) error {
-	now := time.Now().UTC()
-	peer := Peer{
-		PeerID:         peerID,
-		LastRemoteAddr: remoteAddr,
-		LastSeenAt:     now,
-		Reachability:   reachability,
-		ObservedBy:     observedBy,
+func normalizePeerIDs(in []string) []string {
+	if len(in) == 0 {
+		return nil
 	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		id := strings.TrimSpace(v)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (r *PeerRepository) ListMemberIDs(_ context.Context) ([]string, error) {
+	var ids []string
+	if err := DB.Model(&Peer{}).Order("peer_id asc").Pluck("peer_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return normalizePeerIDs(ids), nil
+}
+
+// SyncMembers enforces peers table == membership list.
+func (r *PeerRepository) SyncMembers(_ context.Context, members []string) error {
+	ids := normalizePeerIDs(members)
+	now := time.Now().UTC()
 
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "peer_id"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"last_remote_addr": peer.LastRemoteAddr,
-				"last_seen_at":     peer.LastSeenAt,
-				"reachability":     peer.Reachability,
-				"observed_by":      peer.ObservedBy,
-			}),
-		}).Create(&peer).Error
+		if len(ids) == 0 {
+			return tx.Where("1 = 1").Delete(&Peer{}).Error
+		}
+
+		if err := tx.Where("peer_id NOT IN ?", ids).Delete(&Peer{}).Error; err != nil {
+			return err
+		}
+
+		for _, id := range ids {
+			p := Peer{
+				PeerID:       id,
+				LastSeenAt:   now,
+				Reachability: "offline",
+				ObservedBy:   "",
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "peer_id"}},
+				DoNothing: true,
+			}).Create(&p).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+func (r *PeerRepository) UpsertLastSeen(_ context.Context, peerID, remoteAddr, observedBy, reachability string) error {
+	return DB.Model(&Peer{}).Where("peer_id = ?", peerID).Updates(map[string]interface{}{
+		"last_remote_addr": remoteAddr,
+		"last_seen_at":     time.Now().UTC(),
+		"reachability":     reachability,
+		"observed_by":      observedBy,
+	}).Error
 }
 
 func (r *PeerRepository) UpdatePingResult(_ context.Context, peerID, observedBy string, ok bool, rtt time.Duration) error {
@@ -320,19 +369,14 @@ func (r *PeerRepository) UpdatePingResult(_ context.Context, peerID, observedBy 
 		ObservedBy:    observedBy,
 	}
 
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "peer_id"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"last_ping_ok":     peer.LastPingOK,
-				"last_ping_at":     peer.LastPingAt,
-				"last_ping_rtt_ms": peer.LastPingRTTMs,
-				"observed_by":      peer.ObservedBy,
-				"reachability":     peer.Reachability,
-				"last_seen_at":     peer.LastSeenAt,
-			}),
-		}).Create(&peer).Error
-	})
+	return DB.Model(&Peer{}).Where("peer_id = ?", peerID).Updates(map[string]interface{}{
+		"last_ping_ok":     peer.LastPingOK,
+		"last_ping_at":     peer.LastPingAt,
+		"last_ping_rtt_ms": peer.LastPingRTTMs,
+		"observed_by":      peer.ObservedBy,
+		"reachability":     peer.Reachability,
+		"last_seen_at":     peer.LastSeenAt,
+	}).Error
 }
 
 func (r *PeerRepository) UpdateReachability(_ context.Context, peerID, observedBy, reachability string) error {
@@ -344,16 +388,11 @@ func (r *PeerRepository) UpdateReachability(_ context.Context, peerID, observedB
 		ObservedBy:   observedBy,
 	}
 
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "peer_id"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"reachability": peer.Reachability,
-				"observed_by":  peer.ObservedBy,
-				"last_seen_at": peer.LastSeenAt,
-			}),
-		}).Create(&peer).Error
-	})
+	return DB.Model(&Peer{}).Where("peer_id = ?", peerID).Updates(map[string]interface{}{
+		"reachability": peer.Reachability,
+		"observed_by":  peer.ObservedBy,
+		"last_seen_at": peer.LastSeenAt,
+	}).Error
 }
 
 func (r *PeerRepository) ListPeerStatuses(_ context.Context) ([]Peer, error) {
@@ -362,30 +401,6 @@ func (r *PeerRepository) ListPeerStatuses(_ context.Context) ([]Peer, error) {
 		return nil, err
 	}
 	return peers, nil
-}
-
-func (r *PeerRepository) UpsertSelf(_ context.Context, peerID string) error {
-	now := time.Now().UTC()
-	peer := Peer{
-		PeerID:       peerID,
-		LastSeenAt:   now,
-		Reachability: "self",
-		ObservedBy:   peerID,
-	}
-
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "peer_id"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"last_seen_at":     peer.LastSeenAt,
-				"reachability":     peer.Reachability,
-				"observed_by":      peer.ObservedBy,
-				"last_ping_ok":     false,
-				"last_ping_at":     nil,
-				"last_ping_rtt_ms": nil,
-			}),
-		}).Create(&peer).Error
-	})
 }
 
 func (r *PeerRepository) MergeObservedState(_ context.Context, state events.PeerStateObserved) error {
@@ -412,7 +427,7 @@ func (r *PeerRepository) MergeObservedState(_ context.Context, state events.Peer
 		err := tx.Where("peer_id = ?", incoming.PeerID).First(&existing).Error
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return tx.Create(&incoming).Error
+				return nil
 			}
 			return err
 		}
@@ -467,8 +482,4 @@ func peerUpdatedAt(p Peer) time.Time {
 		return p.LastPingAt.UTC()
 	}
 	return p.LastSeenAt.UTC()
-}
-
-func (r *PeerRepository) DeleteOfflineBefore(_ context.Context, cutoff time.Time) error {
-	return DB.Where("reachability = ? AND last_seen_at < ?", "offline", cutoff.UTC()).Delete(&Peer{}).Error
 }

@@ -29,7 +29,6 @@ type Config struct {
 	ClusterID       string        `json:"cluster_id"`
 	SystemPubKey    string        `json:"system_pubkey"`
 	AdminProof      AdminProof    `json:"admin_proof"`
-	Members         []string      `json:"members"`
 }
 
 type AutoTLSConfig struct {
@@ -237,23 +236,6 @@ func (s *Store) Update(next Config) error {
 	return nil
 }
 
-func (s *Store) PersistMembers(members []string) error {
-	normalizedMembers := dedupeTrimmed(members)
-
-	s.mu.Lock()
-	next := s.cfg
-	if stringSliceEqual(next.Members, normalizedMembers) {
-		s.mu.Unlock()
-		return nil
-	}
-	next.Members = normalizedMembers
-	s.cfg = next
-	path := s.path
-	s.mu.Unlock()
-
-	return saveToFile(path, next)
-}
-
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -331,7 +313,6 @@ func normalize(cfg Config) Config {
 	if cfg.AutoTLS.Port <= 0 || cfg.AutoTLS.Port > 65535 {
 		cfg.AutoTLS.Port = defaultAutoTLSPort
 	}
-	cfg.Members = dedupeTrimmed(cfg.Members)
 	return cfg
 }
 
@@ -346,42 +327,9 @@ func copyConfig(cfg Config) Config {
 		ClusterID:       cfg.ClusterID,
 		SystemPubKey:    cfg.SystemPubKey,
 		AdminProof:      cfg.AdminProof,
-		Members:         append([]string(nil), cfg.Members...),
 	}
 	copy(next.InitConnections, cfg.InitConnections)
 	return next
-}
-
-func dedupeTrimmed(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		id := strings.TrimSpace(v)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out
-}
-
-func stringSliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Store) UpdateFeedURL() (string, error) {

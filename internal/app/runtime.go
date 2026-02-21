@@ -59,11 +59,6 @@ func startShutdownBridge(ctx context.Context, cancel context.CancelFunc, bus *ev
 func startRuntimeServices(ctx context.Context, bus *events.Bus, node *network.Node) {
 	node.StartShutdownHandler(ctx)
 	peerRepo := database.NewPeerRepository()
-	if err := peerRepo.UpsertSelf(ctx, node.Host.ID().String()); err != nil {
-		logging.Log("PRESENCE", "init_self_failed", map[string]string{
-			"reason": err.Error(),
-		})
-	}
 	peerPresence := presence.NewService(bus, peerRepo, node.Host.ID().String())
 	peerPresence.Start(ctx)
 	node.SetStatusProvider(status.NewService(peerRepo))
@@ -97,11 +92,17 @@ func registerScheduledTasks(
 
 func setupMembership(cfg *config.Store, node *network.Node) error {
 	current := cfg.Get()
+	peerRepo := database.NewPeerRepository()
+	storedMembers, err := peerRepo.ListMemberIDs(context.Background())
+	if err != nil {
+		return err
+	}
+
 	manager, err := membership.NewManager(
 		current.ClusterID,
 		current.SystemPubKey,
 		node.Host.ID().String(),
-		current.Members,
+		storedMembers,
 	)
 	if err != nil {
 		return err
@@ -120,8 +121,8 @@ func setupMembership(cfg *config.Store, node *network.Node) error {
 		node.SetAdminProof(proof)
 	}
 	node.SetMembershipAppliedHandler(func(snapshot membership.Snapshot) {
-		if err := cfg.PersistMembers(snapshot.Members); err != nil {
-			logging.Log("CONFIG", "persist_members_failed", map[string]string{
+		if err := peerRepo.SyncMembers(context.Background(), snapshot.Members); err != nil {
+			logging.Log("DB", "sync_members_failed", map[string]string{
 				"reason": err.Error(),
 			})
 		}
