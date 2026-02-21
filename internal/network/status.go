@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"time"
 
+	"p2pos/internal/logging"
 	"p2pos/internal/status"
 
 	libp2pnet "github.com/libp2p/go-libp2p/core/network"
@@ -51,6 +51,14 @@ func (n *Node) registerStatusHandler() {
 			GeneratedAt: time.Now().UTC(),
 			Peers:       []status.Record{},
 		}
+		if !n.canUseBusinessProtocols() {
+			resp.Error = "node is unconfigured"
+			logging.Log("STATUS", "deny_unconfigured", map[string]string{
+				"peer_id": n.Host.ID().String(),
+			})
+			_ = json.NewEncoder(stream).Encode(resp)
+			return
+		}
 
 		var (
 			peers []status.Record
@@ -68,7 +76,9 @@ func (n *Node) registerStatusHandler() {
 		}
 
 		if err := json.NewEncoder(stream).Encode(resp); err != nil {
-			fmt.Printf("[STATUS] Failed to write response: %v\n", err)
+			logging.Log("STATUS", "encode_failed", map[string]string{
+				"reason": err.Error(),
+			})
 		}
 	})
 }
@@ -113,6 +123,9 @@ func (n *Node) FetchStatus(ctx context.Context, peerID peerstore.ID, scope strin
 }
 
 func (n *Node) ClusterStatus(ctx context.Context) ([]status.Record, error) {
+	if !n.canUseBusinessProtocols() {
+		return nil, errors.New("node is unconfigured")
+	}
 	all := make([]status.Record, 0)
 
 	local, err := n.localStatus(ctx)
@@ -126,7 +139,10 @@ func (n *Node) ClusterStatus(ctx context.Context) ([]status.Record, error) {
 		remote, err := n.FetchStatus(reqCtx, peerID, string(statusScopeLocal))
 		cancel()
 		if err != nil {
-			fmt.Printf("[STATUS] Failed to query %s: %v\n", peerID, err)
+			logging.Log("STATUS", "query_failed", map[string]string{
+				"peer_id": peerID.String(),
+				"reason":  err.Error(),
+			})
 			continue
 		}
 		all = append(all, remote...)
@@ -162,8 +178,5 @@ func recordIsNewer(a, b status.Record) bool {
 }
 
 func recordTimestamp(r status.Record) time.Time {
-	if r.LastPingAt != nil && !r.LastPingAt.IsZero() {
-		return r.LastPingAt.UTC()
-	}
 	return r.LastSeenAt.UTC()
 }

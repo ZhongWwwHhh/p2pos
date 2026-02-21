@@ -2,15 +2,14 @@ package presence
 
 import (
 	"context"
-	"fmt"
 
 	"p2pos/internal/events"
+	"p2pos/internal/logging"
 )
 
 type PeerRepository interface {
 	UpsertLastSeen(ctx context.Context, peerID, remoteAddr, observedBy, reachability string) error
 	UpdateReachability(ctx context.Context, peerID, observedBy, reachability string) error
-	UpsertDiscovered(ctx context.Context, peerID, addr, observedBy string) error
 	MergeObservedState(ctx context.Context, state events.PeerStateObserved) error
 }
 
@@ -42,20 +41,32 @@ func (s *Service) Start(ctx context.Context) {
 				}
 				switch e := evt.(type) {
 				case events.PeerConnected:
-					if err := s.repo.UpsertLastSeen(ctx, e.PeerID, e.RemoteAddr, s.observerID, "connected"); err != nil {
-						fmt.Printf("[PRESENCE] Failed to update peer %s: %v\n", e.PeerID, err)
+					if err := s.repo.UpsertLastSeen(ctx, e.PeerID, e.RemoteAddr, s.observerID, "online"); err != nil {
+						logging.Log("PRESENCE", "update_failed", map[string]string{
+							"peer_id": e.PeerID,
+							"reason":  err.Error(),
+						})
 					}
 				case events.PeerDisconnected:
-					if err := s.repo.UpdateReachability(ctx, e.PeerID, s.observerID, "disconnected"); err != nil {
-						fmt.Printf("[PRESENCE] Failed to update peer reachability %s: %v\n", e.PeerID, err)
+					if err := s.repo.UpdateReachability(ctx, e.PeerID, s.observerID, "offline"); err != nil {
+						logging.Log("PRESENCE", "update_failed", map[string]string{
+							"peer_id": e.PeerID,
+							"reason":  err.Error(),
+						})
 					}
-				case events.PeerDiscovered:
-					if err := s.repo.UpsertDiscovered(ctx, e.PeerID, e.Addr, s.observerID); err != nil {
-						fmt.Printf("[PRESENCE] Failed to upsert discovered peer %s: %v\n", e.PeerID, err)
+				case events.PeerHeartbeat:
+					if err := s.repo.UpsertLastSeen(ctx, e.PeerID, e.RemoteAddr, s.observerID, "online"); err != nil {
+						logging.Log("PRESENCE", "heartbeat_failed", map[string]string{
+							"peer_id": e.PeerID,
+							"reason":  err.Error(),
+						})
 					}
 				case events.PeerStateObserved:
 					if err := s.repo.MergeObservedState(ctx, e); err != nil {
-						fmt.Printf("[PRESENCE] Failed to merge observed state for %s: %v\n", e.PeerID, err)
+						logging.Log("PRESENCE", "merge_failed", map[string]string{
+							"peer_id": e.PeerID,
+							"reason":  err.Error(),
+						})
 					}
 				}
 			}

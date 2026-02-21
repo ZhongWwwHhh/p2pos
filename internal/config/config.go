@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"p2pos/internal/database"
 	"strings"
 	"sync"
 	"time"
 
 	"p2pos/internal/events"
+	"p2pos/internal/logging"
+	"p2pos/internal/membership"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 )
@@ -22,6 +23,20 @@ type Config struct {
 	Listen          ListenConfig `json:"listen"`
 	NetworkMode     string       `json:"network_mode"`
 	UpdateFeedURL   string       `json:"update_feed_url"`
+	NodePrivateKey  string       `json:"node_private_key"`
+	ClusterID       string       `json:"cluster_id"`
+	SystemPubKey    string       `json:"system_pubkey"`
+	AdminProof      AdminProof   `json:"admin_proof"`
+	Members         []string     `json:"members"`
+}
+
+type AdminProof struct {
+	ClusterID string `json:"cluster_id"`
+	PeerID    string `json:"peer_id"`
+	Role      string `json:"role"`
+	ValidFrom string `json:"valid_from"`
+	ValidTo   string `json:"valid_to"`
+	Sig       string `json:"sig"`
 }
 
 type Connection struct {
@@ -65,6 +80,7 @@ type Store struct {
 const defaultConfigPath = "config.json"
 const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
 const defaultNetworkMode = "auto"
+const defaultClusterID = "default"
 
 func NewStore(bus *events.Bus) *Store {
 	return &Store{
@@ -79,6 +95,7 @@ func Default() Config {
 		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
 		NetworkMode:   defaultNetworkMode,
 		UpdateFeedURL: defaultUpdateFeedURL,
+		ClusterID:     defaultClusterID,
 	}
 }
 
@@ -98,7 +115,7 @@ func (s *Store) Init() error {
 
 	normalized := normalize(*cfg)
 
-	nodePrivKey, err := loadOrCreatePrivateKey()
+	nodePrivKey, normalized, err := loadOrCreatePrivateKey(normalized, s.path)
 	if err != nil {
 		return err
 	}
@@ -133,6 +150,14 @@ func (s *Store) NetworkMode() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg.NetworkMode
+}
+
+func (s *Store) AdminProof() (*membership.AdminProof, bool, error) {
+	s.mu.RLock()
+	raw := s.cfg.AdminProof
+	clusterID := s.cfg.ClusterID
+	s.mu.RUnlock()
+	return parseAdminProof(raw, clusterID)
 }
 
 func (s *Store) Update(next Config) error {
@@ -198,6 +223,13 @@ func normalize(cfg Config) Config {
 	if strings.TrimSpace(cfg.UpdateFeedURL) == "" {
 		cfg.UpdateFeedURL = defaultUpdateFeedURL
 	}
+	cfg.NodePrivateKey = strings.TrimSpace(cfg.NodePrivateKey)
+	cfg.SystemPubKey = strings.TrimSpace(cfg.SystemPubKey)
+	cfg.ClusterID = strings.TrimSpace(cfg.ClusterID)
+	if cfg.ClusterID == "" {
+		cfg.ClusterID = defaultClusterID
+	}
+	cfg.Members = dedupeTrimmed(cfg.Members)
 	return cfg
 }
 
@@ -207,9 +239,34 @@ func copyConfig(cfg Config) Config {
 		Listen:          append(ListenConfig(nil), cfg.Listen...),
 		NetworkMode:     cfg.NetworkMode,
 		UpdateFeedURL:   cfg.UpdateFeedURL,
+		NodePrivateKey:  cfg.NodePrivateKey,
+		ClusterID:       cfg.ClusterID,
+		SystemPubKey:    cfg.SystemPubKey,
+		AdminProof:      cfg.AdminProof,
+		Members:         append([]string(nil), cfg.Members...),
 	}
 	copy(next.InitConnections, cfg.InitConnections)
 	return next
+}
+
+func dedupeTrimmed(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		id := strings.TrimSpace(v)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *Store) UpdateFeedURL() (string, error) {
@@ -239,48 +296,105 @@ func toEventConnections(conns []Connection) []events.ConfigConnection {
 	return out
 }
 
-func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
-	storedPrivKey, err := database.LoadNodePrivateKey()
-	if err != nil {
-		return nil, err
+func parseAdminProof(raw AdminProof, clusterID string) (*membership.AdminProof, bool, error) {
+	isEmpty := strings.TrimSpace(raw.PeerID) == "" &&
+		strings.TrimSpace(raw.Sig) == "" &&
+		strings.TrimSpace(raw.ValidFrom) == "" &&
+		strings.TrimSpace(raw.ValidTo) == "" &&
+		strings.TrimSpace(raw.ClusterID) == "" &&
+		strings.TrimSpace(raw.Role) == ""
+	if isEmpty {
+		return nil, false, nil
 	}
 
-	generateAndPersistNodeKey := func() (crypto.PrivKey, error) {
+	if strings.TrimSpace(raw.ClusterID) == "" {
+		raw.ClusterID = clusterID
+	}
+	if strings.TrimSpace(raw.Role) == "" {
+		raw.Role = "admin"
+	}
+
+	validFrom, err := parseTime(raw.ValidFrom)
+	if err != nil {
+		return nil, false, fmt.Errorf("admin_proof valid_from invalid: %w", err)
+	}
+	validTo, err := parseTime(raw.ValidTo)
+	if err != nil {
+		return nil, false, fmt.Errorf("admin_proof valid_to invalid: %w", err)
+	}
+	if raw.PeerID == "" || raw.Sig == "" {
+		return nil, false, fmt.Errorf("admin_proof missing peer_id or sig")
+	}
+
+	return &membership.AdminProof{
+		ClusterID: raw.ClusterID,
+		PeerID:    raw.PeerID,
+		Role:      raw.Role,
+		ValidFrom: validFrom,
+		ValidTo:   validTo,
+		Sig:       raw.Sig,
+	}, true, nil
+}
+
+func parseTime(raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty time")
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return ts.UTC(), nil
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return ts.UTC(), nil
+}
+
+func loadOrCreatePrivateKey(cfg Config, path string) (crypto.PrivKey, Config, error) {
+	generateAndPersistNodeKey := func(reason string) (crypto.PrivKey, Config, error) {
 		generatedKey, _, err := crypto.GenerateEd25519Key(nil)
 		if err != nil {
-			return nil, err
+			return nil, cfg, err
 		}
 
 		privKeyBytes, err := crypto.MarshalPrivateKey(generatedKey)
 		if err != nil {
-			return nil, err
+			return nil, cfg, err
 		}
 
 		encodedPrivKey := base64.StdEncoding.EncodeToString(privKeyBytes)
-		if err := database.SaveNodePrivateKey(encodedPrivKey); err != nil {
-			return nil, err
+		cfg.NodePrivateKey = encodedPrivKey
+		if err := saveToFile(path, cfg); err != nil {
+			return nil, cfg, err
 		}
 
-		fmt.Println("[NODE] Generated and persisted new node private key")
-		return generatedKey, nil
+		logging.Log("CONFIG", "node_key_generated", map[string]string{
+			"reason": reason,
+		})
+		return generatedKey, cfg, nil
 	}
 
-	if storedPrivKey == "" {
-		return generateAndPersistNodeKey()
+	if cfg.NodePrivateKey == "" {
+		return generateAndPersistNodeKey("missing")
 	}
 
-	privKeyBytes, err := base64.StdEncoding.DecodeString(storedPrivKey)
+	privKeyBytes, err := base64.StdEncoding.DecodeString(cfg.NodePrivateKey)
 	if err != nil {
-		fmt.Printf("[NODE] Stored private key is invalid base64, regenerating: %v\n", err)
-		return generateAndPersistNodeKey()
+		logging.Log("CONFIG", "node_key_regenerate", map[string]string{
+			"reason": "invalid_base64",
+		})
+		return generateAndPersistNodeKey("invalid_base64")
 	}
 
 	loadedKey, err := crypto.UnmarshalPrivateKey(privKeyBytes)
 	if err != nil {
-		fmt.Printf("[NODE] Stored private key is invalid, regenerating: %v\n", err)
-		return generateAndPersistNodeKey()
+		logging.Log("CONFIG", "node_key_regenerate", map[string]string{
+			"reason": "invalid_key",
+		})
+		return generateAndPersistNodeKey("invalid_key")
 	}
 
-	fmt.Println("[NODE] Loaded persisted node private key")
-	return loadedKey, nil
+	logging.Log("CONFIG", "node_key_loaded", nil)
+	return loadedKey, cfg, nil
 }

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"p2pos/internal/events"
+	"p2pos/internal/logging"
+	"p2pos/internal/membership"
 	"p2pos/internal/status"
 
 	"github.com/libp2p/go-libp2p"
@@ -30,8 +32,13 @@ type Node struct {
 	PingService *ping.PingService
 	Tracker     *Tracker
 	bus         *events.Bus
+	memberMu    sync.RWMutex
+	membership  *membership.Manager
+	state       stateHolder
 	statusMu    sync.RWMutex
 	status      StatusProvider
+	privKey     crypto.PrivKey
+	adminProof  *membership.AdminProof
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -130,14 +137,24 @@ func NewNode(cfg ListenProvider, bus *events.Bus) (*Node, error) {
 		PingService: &ping.PingService{Host: hostNode},
 		Tracker:     NewTracker(),
 		bus:         bus,
+		privKey:     privKey,
+		state: stateHolder{
+			state: RuntimeStateUnconfigured,
+		},
 	}
 	if enablePublicService {
-		fmt.Println("[NODE] Network mode: public (NATPortMap, AutoRelay, HolePunching, NATService, RelayService)")
+		logging.Log("NODE", "network_mode", map[string]string{
+			"mode": "public",
+		})
 	} else {
-		fmt.Println("[NODE] Network mode: private (NATPortMap, AutoRelay, HolePunching)")
+		logging.Log("NODE", "network_mode", map[string]string{
+			"mode": "private",
+		})
 	}
 	n.registerConnectionNotifications()
-	n.registerPeerExchangeHandler()
+	n.registerMembershipHandler()
+	n.registerMembershipPushHandler()
+	n.registerHeartbeatHandler()
 	n.registerStatusHandler()
 	n.startReachabilityWatcher()
 	return n, nil
@@ -151,10 +168,14 @@ func shouldEnablePublicService(mode string) bool {
 		return false
 	default:
 		if hasPublicIPv4() {
-			fmt.Println("[NODE] network_mode=auto detected public IPv4, enabling public services")
+			logging.Log("NODE", "network_mode_auto", map[string]string{
+				"decision": "public",
+			})
 			return true
 		}
-		fmt.Println("[NODE] network_mode=auto no public IPv4 detected, using private mode")
+		logging.Log("NODE", "network_mode_auto", map[string]string{
+			"decision": "private",
+		})
 		return false
 	}
 }
@@ -199,7 +220,9 @@ func hasPublicIPv4() bool {
 func (n *Node) startReachabilityWatcher() {
 	sub, err := n.Host.EventBus().Subscribe(new(libp2pevent.EvtLocalReachabilityChanged))
 	if err != nil {
-		fmt.Printf("[NODE] Reachability subscribe failed: %v\n", err)
+		logging.Log("NODE", "reachability_subscribe_failed", map[string]string{
+			"reason": err.Error(),
+		})
 		return
 	}
 
@@ -210,7 +233,9 @@ func (n *Node) startReachabilityWatcher() {
 			if !ok {
 				continue
 			}
-			fmt.Printf("[NODE] AutoNAT reachability changed: %s\n", ev.Reachability.String())
+			logging.Log("NODE", "autonat_reachability", map[string]string{
+				"reachability": ev.Reachability.String(),
+			})
 		}
 	}()
 }
@@ -228,9 +253,12 @@ func tuneQUICUDPBuffer() {
 	}
 
 	for _, kv := range settings {
-		out, err := exec.Command("sysctl", "-w", kv).CombinedOutput()
+		_, err := exec.Command("sysctl", "-w", kv).CombinedOutput()
 		if err != nil {
-			fmt.Printf("[NODE] QUIC UDP buffer tune failed (%s): %v (%s)\n", kv, err, strings.TrimSpace(string(out)))
+			logging.Log("NODE", "quic_udp_tune_failed", map[string]string{
+				"setting": kv,
+				"reason":  err.Error(),
+			})
 		}
 	}
 }
@@ -248,6 +276,29 @@ func (n *Node) SetStatusProvider(provider StatusProvider) {
 	n.statusMu.Unlock()
 }
 
+func (n *Node) SetMembershipManager(manager *membership.Manager) {
+	n.memberMu.Lock()
+	n.membership = manager
+	n.memberMu.Unlock()
+	n.evaluateRuntimeState("membership-set")
+}
+
+func (n *Node) SetAdminProof(proof *membership.AdminProof) {
+	n.memberMu.Lock()
+	n.adminProof = proof
+	n.memberMu.Unlock()
+}
+
+func (n *Node) isMember(peerID string) bool {
+	n.memberMu.RLock()
+	manager := n.membership
+	n.memberMu.RUnlock()
+	if manager == nil {
+		return false
+	}
+	return manager.IsMember(peerID)
+}
+
 func (n *Node) LogLocalAddrs() error {
 	peerInfo := peerstore.AddrInfo{
 		ID:    n.Host.ID(),
@@ -259,7 +310,9 @@ func (n *Node) LogLocalAddrs() error {
 		return err
 	}
 
-	fmt.Println("[NODE] Local peer address:", addrs)
+	logging.Log("NODE", "local_addrs", map[string]string{
+		"addrs": fmt.Sprintf("%v", addrs),
+	})
 	return nil
 }
 
@@ -273,7 +326,7 @@ func (n *Node) StartBootstrap(ctx context.Context, resolver Resolver, interval t
 	}
 
 	run := func() bool {
-		if len(n.Host.Network().Peers()) > 0 {
+		if n.canUseBusinessProtocols() && len(n.Host.Network().Peers()) > 0 {
 			fmt.Println("[BOOTSTRAP] Existing peer connection detected, stopping bootstrap discovery")
 			return false
 		}
@@ -296,7 +349,8 @@ func (n *Node) StartBootstrap(ctx context.Context, resolver Resolver, interval t
 				continue
 			}
 			fmt.Printf("[BOOTSTRAP] Connected to bootstrap peer: %s\n", candidate.ID.String())
-			return false
+			// Keep retry loop in unconfigured mode to continue membership bootstrap attempts.
+			return !n.canUseBusinessProtocols()
 		}
 
 		return true
@@ -343,9 +397,13 @@ func (n *Node) StartShutdownHandler(ctx context.Context) {
 				if !ok {
 					continue
 				}
-				fmt.Printf("[NODE] Shutdown requested (%s), closing host...\n", shutdown.Reason)
+				logging.Log("NODE", "shutdown", map[string]string{
+					"reason": shutdown.Reason,
+				})
 				if err := n.Close(); err != nil {
-					fmt.Printf("[NODE] Host close failed: %v\n", err)
+					logging.Log("NODE", "shutdown_failed", map[string]string{
+						"reason": err.Error(),
+					})
 				}
 				return
 			}
@@ -356,6 +414,14 @@ func (n *Node) StartShutdownHandler(ctx context.Context) {
 func (n *Node) registerConnectionNotifications() {
 	n.Host.Network().Notify(&libp2pnet.NotifyBundle{
 		ConnectedF: func(_ libp2pnet.Network, conn libp2pnet.Conn) {
+			if !n.allowPeer(conn.RemotePeer().String()) {
+				logging.Log("NODE", "reject_peer", map[string]string{
+					"peer_id": conn.RemotePeer().String(),
+					"state":   string(n.RuntimeState()),
+				})
+				_ = conn.Close()
+				return
+			}
 			n.Tracker.Upsert(remoteAddrInfo(conn.RemotePeer(), conn.RemoteMultiaddr()))
 			if n.bus != nil {
 				n.bus.Publish(events.PeerConnected{
@@ -364,10 +430,15 @@ func (n *Node) registerConnectionNotifications() {
 					At:         time.Now().UTC(),
 				})
 			}
+			n.evaluateRuntimeState("peer-connected")
 		},
 		DisconnectedF: func(network libp2pnet.Network, conn libp2pnet.Conn) {
 			if len(network.ConnsToPeer(conn.RemotePeer())) == 0 {
 				n.Tracker.Remove(conn.RemotePeer())
+			}
+			if !n.allowPeer(conn.RemotePeer().String()) {
+				n.evaluateRuntimeState("peer-disconnected-non-member")
+				return
 			}
 			if n.bus != nil {
 				n.bus.Publish(events.PeerDisconnected{
@@ -376,6 +447,7 @@ func (n *Node) registerConnectionNotifications() {
 					At:         time.Now().UTC(),
 				})
 			}
+			n.evaluateRuntimeState("peer-disconnected")
 		},
 	})
 }

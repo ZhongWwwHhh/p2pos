@@ -11,6 +11,8 @@ import (
 	"p2pos/internal/config"
 	"p2pos/internal/database"
 	"p2pos/internal/events"
+	"p2pos/internal/logging"
+	"p2pos/internal/membership"
 	"p2pos/internal/network"
 	"p2pos/internal/presence"
 	"p2pos/internal/scheduler"
@@ -39,7 +41,9 @@ func startShutdownBridge(ctx context.Context, cancel context.CancelFunc, bus *ev
 				if !ok {
 					continue
 				}
-				fmt.Printf("[APP] Shutdown requested (%s)\n", req.Reason)
+				logging.Log("APP", "shutdown_requested", map[string]string{
+					"reason": req.Reason,
+				})
 				cancel()
 				return
 			}
@@ -56,7 +60,9 @@ func startRuntimeServices(ctx context.Context, bus *events.Bus, node *network.No
 	node.StartShutdownHandler(ctx)
 	peerRepo := database.NewPeerRepository()
 	if err := peerRepo.UpsertSelf(ctx, node.Host.ID().String()); err != nil {
-		fmt.Printf("[PRESENCE] Failed to initialize self peer record: %v\n", err)
+		logging.Log("PRESENCE", "init_self_failed", map[string]string{
+			"reason": err.Error(),
+		})
 	}
 	peerPresence := presence.NewService(bus, peerRepo, node.Host.ID().String())
 	peerPresence.Start(ctx)
@@ -70,7 +76,7 @@ func registerScheduledTasks(
 	cfg *config.Store,
 	shutdown *BusShutdownRequester,
 ) error {
-	fmt.Println("[APP] Starting auto-update checker...")
+	logging.Log("APP", "start_update_checker", nil)
 	updater := update.NewService(cfg, shutdown)
 	if err := s.Register(tasks.NewUpdateCheckTask(updater, 3*time.Minute)); err != nil {
 		return err
@@ -79,12 +85,40 @@ func registerScheduledTasks(
 	resolver := network.NewConfigResolver(node.Host.ID(), cfg, network.NewNetDNSResolver())
 	node.StartBootstrap(ctx, resolver, time.Minute)
 
-	if err := s.Register(tasks.NewPingTask(node.Tracker, node.PingService, database.NewPeerRepository(), node.Host.ID().String())); err != nil {
+	if err := s.Register(tasks.NewMembershipSyncTask(node)); err != nil {
 		return err
 	}
-	if err := s.Register(tasks.NewPeerSyncTask(node, database.NewPeerRepository())); err != nil {
+	if err := s.Register(tasks.NewHeartbeatTask(node)); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func setupMembership(cfg *config.Store, node *network.Node) error {
+	current := cfg.Get()
+	manager, err := membership.NewManager(
+		current.ClusterID,
+		current.SystemPubKey,
+		node.Host.ID().String(),
+		current.Members,
+	)
+	if err != nil {
+		return err
+	}
+	proof, ok, err := cfg.AdminProof()
+	if err != nil {
+		return err
+	}
+	if ok {
+		if proof.PeerID != node.Host.ID().String() {
+			return fmt.Errorf("admin_proof peer_id does not match local peer_id")
+		}
+		if err := manager.ValidateAdminProof(*proof, proof.PeerID); err != nil {
+			return err
+		}
+		node.SetAdminProof(proof)
+	}
+	node.SetMembershipManager(manager)
 	return nil
 }

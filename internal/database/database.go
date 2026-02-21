@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"p2pos/internal/events"
+	"p2pos/internal/logging"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -18,17 +19,6 @@ import (
 )
 
 var DB *gorm.DB
-
-const (
-	settingKeyVersion  = "version"
-	settingKeyNodePriv = "nodePriv"
-)
-
-// Setting 键值对存储
-type Setting struct {
-	Key   string `gorm:"primaryKey"`
-	Value string
-}
 
 // Peer 对等节点信息
 type Peer struct {
@@ -77,7 +67,7 @@ func Init() error {
 	}
 
 	// 自动迁移表结构
-	if err := DB.AutoMigrate(&Setting{}, &Peer{}); err != nil {
+	if err := DB.AutoMigrate(&Peer{}); err != nil {
 		return err
 	}
 
@@ -85,8 +75,8 @@ func Init() error {
 		return err
 	}
 
-	// 初始化默认设置
-	if err := initDefaultSettings(); err != nil {
+	// settings table was removed; config.json is now the single source of identity/config data.
+	if err := DB.Exec(`DROP TABLE IF EXISTS settings`).Error; err != nil {
 		return err
 	}
 
@@ -106,16 +96,24 @@ func configureSQLite(db *gorm.DB) error {
 	// Improve concurrent read/write behavior and wait for lock instead of failing fast.
 	// Some filesystems (e.g. certain mounted network/host filesystems) may not support WAL.
 	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
-		fmt.Printf("[DB] WAL not available, fallback to DELETE journal mode: %v\n", err)
+		logging.Log("DB", "wal_unavailable", map[string]string{
+			"reason": err.Error(),
+		})
 		if fallbackErr := db.Exec("PRAGMA journal_mode=DELETE;").Error; fallbackErr != nil {
-			fmt.Printf("[DB] Failed to switch journal mode to DELETE: %v\n", fallbackErr)
+			logging.Log("DB", "journal_mode_fallback_failed", map[string]string{
+				"reason": fallbackErr.Error(),
+			})
 		}
 	}
 	if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
-		fmt.Printf("[DB] Failed to set synchronous=NORMAL: %v\n", err)
+		logging.Log("DB", "synchronous_failed", map[string]string{
+			"reason": err.Error(),
+		})
 	}
 	if err := db.Exec("PRAGMA busy_timeout=5000;").Error; err != nil {
-		fmt.Printf("[DB] Failed to set busy_timeout: %v\n", err)
+		logging.Log("DB", "busy_timeout_failed", map[string]string{
+			"reason": err.Error(),
+		})
 	}
 	return nil
 }
@@ -212,7 +210,7 @@ func migratePeerSchema(db *gorm.DB) error {
 	if hasLastPingAt {
 		sourcePingAtExpr = "last_ping_at"
 	}
-	sourceReachabilityExpr := "'unknown'"
+	sourceReachabilityExpr := "'offline'"
 	if hasReachability {
 		sourceReachabilityExpr = "COALESCE(reachability, 'unknown')"
 	}
@@ -269,91 +267,6 @@ func migratePeerSchema(db *gorm.DB) error {
 }
 
 // initDefaultSettings 初始化默认设置值
-func initDefaultSettings() error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := createSettingIfMissing(tx, settingKeyVersion, "00000000-0000"); err != nil {
-			return err
-		}
-		if err := createSettingIfMissing(tx, settingKeyNodePriv, ""); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
-func createSettingIfMissing(tx *gorm.DB, key, defaultValue string) error {
-	return tx.Clauses(clause.OnConflict{DoNothing: true}).
-		Create(&Setting{Key: key, Value: defaultValue}).Error
-}
-
-func upsertSetting(tx *gorm.DB, key, value string) error {
-	return tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"value"}),
-	}).Create(&Setting{Key: key, Value: value}).Error
-}
-
-func getSettingOrDefault(key, fallback string) (string, error) {
-	var s Setting
-	err := DB.Where("key = ?", key).First(&s).Error
-	if err == nil {
-		return s.Value, nil
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return fallback, nil
-	}
-	return "", err
-}
-
-// LoadNodePrivateKey 读取节点私钥
-func LoadNodePrivateKey() (string, error) {
-	return getSettingOrDefault(settingKeyNodePriv, "")
-}
-
-// SaveNodePrivateKey 保存节点私钥
-func SaveNodePrivateKey(nodePriv string) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return upsertSetting(tx, settingKeyNodePriv, nodePriv)
-	})
-}
-
-// LoadNodeSetting 读取节点设置
-func LoadNodeSetting() (*NodeSetting, error) {
-	version, err := getSettingOrDefault(settingKeyVersion, "00000000-0000")
-	if err != nil {
-		return nil, err
-	}
-
-	nodePriv, err := getSettingOrDefault(settingKeyNodePriv, "")
-	if err != nil {
-		return nil, err
-	}
-
-	return &NodeSetting{
-		Version:  version,
-		NodePriv: nodePriv,
-	}, nil
-}
-
-// SaveNodeSetting 保存或更新节点设置
-func SaveNodeSetting(ns *NodeSetting) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := upsertSetting(tx, settingKeyVersion, ns.Version); err != nil {
-			return err
-		}
-		if err := upsertSetting(tx, settingKeyNodePriv, ns.NodePriv); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
-// NodeSetting 节点设置信息
-type NodeSetting struct {
-	Version  string
-	NodePriv string
-}
-
 type PeerRepository struct{}
 
 func NewPeerRepository() *PeerRepository {
@@ -392,9 +305,9 @@ func (r *PeerRepository) UpdatePingResult(_ context.Context, peerID, observedBy 
 		rttMs = &v
 	}
 
-	reachability := "disconnected"
+	reachability := "offline"
 	if ok {
-		reachability = "connected"
+		reachability = "online"
 	}
 
 	peer := Peer{
@@ -475,32 +388,6 @@ func (r *PeerRepository) UpsertSelf(_ context.Context, peerID string) error {
 	})
 }
 
-func (r *PeerRepository) UpsertDiscovered(_ context.Context, peerID, addr, observedBy string) error {
-	now := time.Now().UTC()
-	peer := Peer{
-		PeerID:         peerID,
-		LastRemoteAddr: addr,
-		LastSeenAt:     now,
-		Reachability:   "discovered",
-		ObservedBy:     observedBy,
-	}
-
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "peer_id"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"last_remote_addr": peer.LastRemoteAddr,
-				"last_seen_at":     peer.LastSeenAt,
-				"observed_by":      peer.ObservedBy,
-				"reachability": gorm.Expr(
-					"CASE WHEN reachability IN ('connected','self') THEN reachability ELSE ? END",
-					peer.Reachability,
-				),
-			}),
-		}).Create(&peer).Error
-	})
-}
-
 func (r *PeerRepository) MergeObservedState(_ context.Context, state events.PeerStateObserved) error {
 	if state.PeerID == "" {
 		return nil
@@ -510,17 +397,14 @@ func (r *PeerRepository) MergeObservedState(_ context.Context, state events.Peer
 		PeerID:         state.PeerID,
 		LastRemoteAddr: state.RemoteAddr,
 		LastSeenAt:     state.LastSeenAt.UTC(),
-		LastPingRTTMs:  state.LastPingRTTMs,
-		LastPingOK:     state.LastPingOK,
-		LastPingAt:     cloneUTC(state.LastPingAt),
-		Reachability:   state.Reachability,
+		Reachability:   normalizeReachability(state.Reachability),
 		ObservedBy:     state.ObservedBy,
 	}
 	if incoming.LastSeenAt.IsZero() {
 		incoming.LastSeenAt = time.Now().UTC()
 	}
 	if incoming.Reachability == "" {
-		incoming.Reachability = "discovered"
+		incoming.Reachability = "offline"
 	}
 
 	return DB.Transaction(func(tx *gorm.DB) error {
@@ -550,11 +434,11 @@ func (r *PeerRepository) MergeObservedState(_ context.Context, state events.Peer
 
 		if incomingUpdated.After(existingUpdated) {
 			updates["last_seen_at"] = incoming.LastSeenAt
-			updates["last_ping_ok"] = incoming.LastPingOK
-			updates["last_ping_at"] = incoming.LastPingAt
-			updates["last_ping_rtt_ms"] = incoming.LastPingRTTMs
+			updates["last_ping_ok"] = false
+			updates["last_ping_at"] = nil
+			updates["last_ping_rtt_ms"] = nil
 			updates["observed_by"] = incoming.ObservedBy
-			if existing.Reachability != "connected" && existing.Reachability != "self" {
+			if existing.Reachability != "online" && existing.Reachability != "self" {
 				updates["reachability"] = incoming.Reachability
 			}
 			if incoming.LastRemoteAddr != "" {
@@ -569,12 +453,13 @@ func (r *PeerRepository) MergeObservedState(_ context.Context, state events.Peer
 	})
 }
 
-func cloneUTC(v *time.Time) *time.Time {
-	if v == nil {
-		return nil
+func normalizeReachability(v string) string {
+	switch v {
+	case "online", "connected", "self":
+		return "online"
+	default:
+		return "offline"
 	}
-	t := v.UTC()
-	return &t
 }
 
 func peerUpdatedAt(p Peer) time.Time {
@@ -584,6 +469,6 @@ func peerUpdatedAt(p Peer) time.Time {
 	return p.LastSeenAt.UTC()
 }
 
-func (r *PeerRepository) DeleteDisconnectedBefore(_ context.Context, cutoff time.Time) error {
-	return DB.Where("reachability = ? AND last_seen_at < ?", "disconnected", cutoff.UTC()).Delete(&Peer{}).Error
+func (r *PeerRepository) DeleteOfflineBefore(_ context.Context, cutoff time.Time) error {
+	return DB.Where("reachability = ? AND last_seen_at < ?", "offline", cutoff.UTC()).Delete(&Peer{}).Error
 }

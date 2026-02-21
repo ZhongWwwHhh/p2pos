@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"p2pos/internal/config"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"p2pos/internal/config"
+	"p2pos/internal/logging"
 )
 
 type Service struct {
@@ -139,21 +141,19 @@ func DownloadBinary(url, targetPath string) error {
 			if totalSize > 0 {
 				percent := downloaded * 100 / totalSize
 				for percent >= nextPercent && nextPercent <= 100 {
-					fmt.Printf(
-						"[UPDATE] Download progress: %d%% (%0.2f/%0.2f MiB) speed: %0.2f MiB/s\n",
-						nextPercent,
-						float64(downloaded)/1024.0/1024.0,
-						float64(totalSize)/1024.0/1024.0,
-						speedMBps,
-					)
+					logging.Log("UPDATE", "download_progress", map[string]string{
+						"percent":  fmt.Sprintf("%d", nextPercent),
+						"download": fmt.Sprintf("%0.2fMiB", float64(downloaded)/1024.0/1024.0),
+						"total":    fmt.Sprintf("%0.2fMiB", float64(totalSize)/1024.0/1024.0),
+						"speed":    fmt.Sprintf("%0.2fMiB_s", speedMBps),
+					})
 					nextPercent += 5
 				}
 			} else if downloaded >= nextUnknownLogBytes {
-				fmt.Printf(
-					"[UPDATE] Downloaded: %0.2f MiB speed: %0.2f MiB/s\n",
-					float64(downloaded)/1024.0/1024.0,
-					speedMBps,
-				)
+				logging.Log("UPDATE", "download_progress", map[string]string{
+					"download": fmt.Sprintf("%0.2fMiB", float64(downloaded)/1024.0/1024.0),
+					"speed":    fmt.Sprintf("%0.2fMiB_s", speedMBps),
+				})
 				nextUnknownLogBytes += 5 * 1024 * 1024
 			}
 		}
@@ -197,12 +197,19 @@ func CheckAndUpdate(feedURL string) (bool, error) {
 	latestVer := strings.TrimPrefix(latestVersion, "v")
 
 	if currentVer >= latestVer {
-		fmt.Printf("[UPDATE] Already at latest version: %s\n", config.AppVersion)
+		logging.Log("UPDATE", "already_latest", map[string]string{
+			"version": config.AppVersion,
+		})
 		return false, nil
 	}
 
-	fmt.Printf("[UPDATE] New version available: %s (current: %s)\n", latestVersion, config.AppVersion)
-	fmt.Printf("[UPDATE] Downloading from: %s\n", downloadURL)
+	logging.Log("UPDATE", "new_version", map[string]string{
+		"latest":  latestVersion,
+		"current": config.AppVersion,
+	})
+	logging.Log("UPDATE", "download_from", map[string]string{
+		"url": downloadURL,
+	})
 
 	// Get the path to the current executable
 	exePath, err := os.Executable()
@@ -211,12 +218,14 @@ func CheckAndUpdate(feedURL string) (bool, error) {
 	}
 
 	// Download the new binary
-	fmt.Println("[UPDATE] Downloading new version...")
+	logging.Log("UPDATE", "download_start", nil)
 	if err := DownloadBinary(downloadURL, exePath); err != nil {
 		return false, fmt.Errorf("failed to update binary: %w", err)
 	}
 
-	fmt.Printf("[UPDATE] Successfully updated to version %s\n", latestVersion)
+	logging.Log("UPDATE", "updated", map[string]string{
+		"version": latestVersion,
+	})
 	return true, nil
 }
 
@@ -229,7 +238,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("load update feed url failed: %w", err)
 	}
 
-	fmt.Println("[UPDATE] Checking for updates...")
+	logging.Log("UPDATE", "check", nil)
 	updated, err := CheckAndUpdate(feedURL)
 	if err != nil {
 		return fmt.Errorf("check failed: %w", err)
@@ -238,7 +247,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	fmt.Println("[UPDATE] Update applied, requesting graceful shutdown for service restart")
+	logging.Log("UPDATE", "applied_shutdown", nil)
 	if s.shutdown != nil {
 		s.shutdown.RequestShutdown("update-applied")
 	}

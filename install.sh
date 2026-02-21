@@ -10,7 +10,6 @@ NC='\033[0m' # No Color
 
 # Configuration
 REPO="ZhongWwwHhh/Ops-System"
-APP_NAME="p2pos"
 SERVICE_NAME="p2pos"
 INSTALL_DIR="$(pwd)"
 CONFIG_FILE="${INSTALL_DIR}/config.json"
@@ -31,6 +30,7 @@ if [ ! -f /etc/os-release ]; then
     exit 1
 fi
 
+# shellcheck disable=SC1091
 source /etc/os-release
 if [[ "$VERSION_ID" != "24.04" || "$ID" != "ubuntu" ]]; then
     echo -e "${RED}Error: This script only supports Ubuntu 24.04${NC}"
@@ -68,23 +68,63 @@ fi
 chmod +x "${BINARY_PATH}"
 echo -e "${GREEN}Binary downloaded and made executable${NC}"
 
-# Create config.json if it doesn't exist
-if [ ! -f "${CONFIG_FILE}" ]; then
-    echo -e "${YELLOW}Creating config.json...${NC}"
-    cat > "${CONFIG_FILE}" << 'EOF'
+echo -e "${YELLOW}Config setup...${NC}"
+
+read -r -p "Enter system_pubkey (leave empty to create new system): " INPUT_SYSTEM_PUB
+read -r -p "Enter cluster_id (default: default): " INPUT_CLUSTER
+if [ -z "$INPUT_CLUSTER" ]; then
+    INPUT_CLUSTER="default"
+fi
+
+if [ -z "$INPUT_SYSTEM_PUB" ]; then
+    echo -e "${YELLOW}Creating new system keys and admin proof...${NC}"
+    read -r -p "Admin proof valid_to (RFC3339, default: 9999-12-31T00:00:00Z): " INPUT_VALID_TO
+    if [ -z "$INPUT_VALID_TO" ]; then
+        INPUT_VALID_TO="9999-12-31T00:00:00Z"
+    fi
+    KEYGEN_OUTPUT=$("${BINARY_PATH}" keygen --new-system --cluster-id "${INPUT_CLUSTER}" --admin-valid-to "${INPUT_VALID_TO}")
+else
+    KEYGEN_OUTPUT=$("${BINARY_PATH}" keygen --cluster-id "${INPUT_CLUSTER}")
+fi
+
+if echo "${KEYGEN_OUTPUT}" | grep -q "^ERR="; then
+    echo -e "${RED}Key generation failed:${NC}"
+    echo "${KEYGEN_OUTPUT}"
+    exit 1
+fi
+
+eval "${KEYGEN_OUTPUT}"
+
+if [ -z "$INPUT_SYSTEM_PUB" ]; then
+    SYSTEM_PUB_KEY="${SYSTEM_PUB_B64}"
+else
+    SYSTEM_PUB_KEY="${INPUT_SYSTEM_PUB}"
+fi
+
+echo -e "${YELLOW}Generating config.json...${NC}"
+cat > "${CONFIG_FILE}" << EOF
 {
   "init_connections": [
     {
       "type": "dns",
       "address": "init.p2pos.zhongwwwhhh.cc"
     }
-  ]
+  ],
+  "cluster_id": "${INPUT_CLUSTER}",
+  "system_pubkey": "${SYSTEM_PUB_KEY}",
+  "members": [],
+  "admin_proof": {
+    "cluster_id": "",
+    "peer_id": "",
+    "role": "",
+    "valid_from": "",
+    "valid_to": "",
+    "sig": ""
+  },
+  "node_private_key": "${NODE_PRIV_B64}"
 }
 EOF
-    echo -e "${GREEN}Config file created at ${CONFIG_FILE}${NC}"
-else
-    echo -e "${YELLOW}Config file already exists at ${CONFIG_FILE}${NC}"
-fi
+echo -e "${GREEN}Config file written at ${CONFIG_FILE}${NC}"
 
 # Create systemd service
 echo -e "${YELLOW}Creating systemd service...${NC}"
@@ -122,6 +162,24 @@ echo -e "${GREEN}Installation complete!${NC}"
 echo -e "${YELLOW}Binary location: ${BINARY_PATH}${NC}"
 echo -e "${YELLOW}Config location: ${CONFIG_FILE}${NC}"
 echo ""
+echo -e "${YELLOW}Node peer_id: ${NODE_PEER_ID}${NC}"
+if [ -z "$INPUT_SYSTEM_PUB" ]; then
+    echo -e "${YELLOW}System public key:${NC} ${SYSTEM_PUB_B64}"
+    echo -e "${YELLOW}System private key:${NC} ${SYSTEM_PRIV_B64}"
+    echo -e "${YELLOW}Admin node private key:${NC} ${ADMIN_PRIV_B64}"
+    echo -e "${YELLOW}Admin peer_id:${NC} ${ADMIN_PEER_ID}"
+    echo -e "${YELLOW}Admin proof:${NC}"
+    cat << EOF
+{
+  "cluster_id": "${ADMIN_PROOF_CLUSTER_ID}",
+  "peer_id": "${ADMIN_PROOF_PEER_ID}",
+  "role": "${ADMIN_PROOF_ROLE}",
+  "valid_from": "${ADMIN_PROOF_VALID_FROM}",
+  "valid_to": "${ADMIN_PROOF_VALID_TO}",
+  "sig": "${ADMIN_PROOF_SIG}"
+}
+EOF
+fi
 echo -e "${YELLOW}Service management commands:${NC}"
 echo "  systemctl status p2pos       - Check service status"
 echo "  systemctl restart p2pos      - Restart service"

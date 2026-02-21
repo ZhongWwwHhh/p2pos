@@ -9,5 +9,17 @@
     "0.0.0.0:4100",
     "[::]:4100"
   ],
+  "cluster_id": "default",
+  "system_pubkey": "",
+  "members": [],
+  "admin_proof": {
+    "cluster_id": "",
+    "peer_id": "",
+    "role": "",
+    "valid_from": "",
+    "valid_to": "",
+    "sig": ""
+  },
+  "node_private_key": "",
   "update_feed_url": "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
 }

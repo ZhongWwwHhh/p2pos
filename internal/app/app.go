@@ -2,17 +2,19 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"p2pos/internal/config"
 	"p2pos/internal/database"
 	"p2pos/internal/events"
+	"p2pos/internal/logging"
 	"p2pos/internal/network"
 	"p2pos/internal/scheduler"
 )
 
 func Run(_ []string) error {
-	fmt.Printf("[APP] P2POS version: %s\n", config.AppVersion)
+	logging.Log("APP", "version", map[string]string{
+		"version": config.AppVersion,
+	})
 
 	if err := database.Init(); err != nil {
 		return err
@@ -33,6 +35,9 @@ func Run(_ []string) error {
 	if err := netNode.LogLocalAddrs(); err != nil {
 		return err
 	}
+	if err := setupMembership(configStore, netNode); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -50,7 +55,9 @@ func Run(_ []string) error {
 	jobScheduler.Start(ctx)
 	<-ctx.Done()
 
-	fmt.Println("[NODE] Received shutdown signal, closing...")
+	logging.Log("APP", "shutdown", map[string]string{
+		"reason": "context_done",
+	})
 	jobScheduler.Wait()
 
 	return nil
