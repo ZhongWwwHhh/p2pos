@@ -42,10 +42,13 @@
 
       <section class="card">
         <h2>Membership List</h2>
+        <div class="row" style="margin-bottom: 8px;">
+          <button class="btn secondary" :disabled="members.length === 0" @click="clearMembers">Clear All</button>
+        </div>
         <div class="list">
           <div v-for="id in members" :key="id" class="list-item">
             <span>{{ id }}</span>
-            <button class="btn secondary" @click="removeMember(id)">Remove</button>
+            <button class="btn secondary list-remove-btn" @click="removeMember(id)">Delete</button>
           </div>
         </div>
 
@@ -192,6 +195,10 @@ const addMember = () => {
 
 const removeMember = (id: string) => {
   members.value = members.value.filter((item) => item !== id);
+};
+
+const clearMembers = () => {
+  members.value = [];
 };
 
 const canLoadBundle = computed(() => {

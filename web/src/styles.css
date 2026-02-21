@@ -127,6 +127,11 @@ textarea {
   font-size: 13px;
 }
 
+.list-remove-btn {
+  padding: 6px 10px;
+  min-width: 72px;
+}
+
 .status {
   display: inline-flex;
   align-items: center;
