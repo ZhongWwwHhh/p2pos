@@ -56,6 +56,7 @@ type ListenProvider interface {
 	AutoTLSMode() string
 	AutoTLSUserEmail() string
 	AutoTLSCacheDir() string
+	AutoTLSPort() int
 	AutoTLSForgeAuth() string
 }
 
@@ -227,11 +228,19 @@ func createAutoTLSManager(cfg ListenProvider, listenAddrs *[]string, wsOptions *
 	if err != nil {
 		return nil, err
 	}
-	*listenAddrs = append(*listenAddrs, autoTLSMgr.AddrStrings()...)
+	port := cfg.AutoTLSPort()
+	if port <= 0 {
+		port = 443
+	}
+	*listenAddrs = append(*listenAddrs,
+		fmt.Sprintf("/ip4/0.0.0.0/tcp/%d/tls/sni/*.%s/ws", port, p2pforge.DefaultForgeDomain),
+		fmt.Sprintf("/ip6/::/tcp/%d/tls/sni/*.%s/ws", port, p2pforge.DefaultForgeDomain),
+	)
 	*wsOptions = append(*wsOptions, websocket.WithTLSConfig(autoTLSMgr.TLSConfig()))
 	logging.Log("NODE", "autotls_enabled", map[string]string{
 		"forge_domain": p2pforge.DefaultForgeDomain,
 		"mode":         cfg.AutoTLSMode(),
+		"port":         fmt.Sprintf("%d", port),
 	})
 	return autoTLSMgr, nil
 }
@@ -575,18 +584,15 @@ func buildListenMultiaddrs(listens []string) ([]string, error) {
 
 			var tcpAddr string
 			var quicAddr string
-			var wsAddr string
 			if ip.To4() != nil {
 				tcpAddr = fmt.Sprintf("/ip4/%s/tcp/%s", host, port)
 				quicAddr = fmt.Sprintf("/ip4/%s/udp/%s/quic-v1", host, port)
-				wsAddr = fmt.Sprintf("/ip4/%s/tcp/%s/ws", host, port)
 			} else {
 				tcpAddr = fmt.Sprintf("/ip6/%s/tcp/%s", host, port)
 				quicAddr = fmt.Sprintf("/ip6/%s/udp/%s/quic-v1", host, port)
-				wsAddr = fmt.Sprintf("/ip6/%s/tcp/%s/ws", host, port)
 			}
 
-			for _, addr := range []string{tcpAddr, quicAddr, wsAddr} {
+			for _, addr := range []string{tcpAddr, quicAddr} {
 				if _, ok := seen[addr]; ok {
 					continue
 				}

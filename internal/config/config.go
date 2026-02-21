@@ -35,6 +35,7 @@ type AutoTLSConfig struct {
 	Mode      string `json:"mode"`
 	Enabled   bool   `json:"enabled"`
 	UserEmail string `json:"user_email"`
+	Port      int    `json:"port"`
 	CacheDir  string `json:"cache_dir"`
 	ForgeAuth string `json:"forge_auth"`
 }
@@ -92,6 +93,7 @@ const defaultNetworkMode = "auto"
 const defaultClusterID = "default"
 const defaultAutoTLSCacheDir = ".autotls-cache"
 const defaultAutoTLSMode = "auto"
+const defaultAutoTLSPort = 4101
 
 func NewStore(bus *events.Bus) *Store {
 	return &Store{
@@ -105,7 +107,7 @@ func Default() Config {
 	return Config{
 		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
 		NetworkMode:   defaultNetworkMode,
-		AutoTLS:       AutoTLSConfig{Mode: defaultAutoTLSMode, CacheDir: defaultAutoTLSCacheDir},
+		AutoTLS:       AutoTLSConfig{Mode: defaultAutoTLSMode, Port: defaultAutoTLSPort, CacheDir: defaultAutoTLSCacheDir},
 		UpdateFeedURL: defaultUpdateFeedURL,
 		ClusterID:     defaultClusterID,
 	}
@@ -180,6 +182,12 @@ func (s *Store) AutoTLSCacheDir() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg.AutoTLS.CacheDir
+}
+
+func (s *Store) AutoTLSPort() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.AutoTLS.Port
 }
 
 func (s *Store) AutoTLSForgeAuth() string {
@@ -284,6 +292,9 @@ func normalize(cfg Config) Config {
 	}
 	if cfg.AutoTLS.CacheDir == "" {
 		cfg.AutoTLS.CacheDir = defaultAutoTLSCacheDir
+	}
+	if cfg.AutoTLS.Port <= 0 || cfg.AutoTLS.Port > 65535 {
+		cfg.AutoTLS.Port = defaultAutoTLSPort
 	}
 	cfg.Members = dedupeTrimmed(cfg.Members)
 	return cfg

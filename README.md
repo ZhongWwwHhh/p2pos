@@ -64,6 +64,7 @@ Example `config.json`:
   "auto_tls": {
     "mode": "auto",
     "user_email": "",
+    "port": 4101,
     "cache_dir": ".autotls-cache",
     "forge_auth": ""
   },
@@ -99,6 +100,7 @@ Minimal config:
 "auto_tls": {
   "mode": "auto",
   "user_email": "ops@example.com",
+  "port": 4101,
   "cache_dir": ".autotls-cache",
   "forge_auth": ""
 }
@@ -108,6 +110,7 @@ Minimal config:
 - `auto` (default): automatically enable AutoTLS when node is detected as public
 - `on`: force enable AutoTLS and attempt cert flow immediately (for first bootstrap node cold-start)
 - `off`: force disable AutoTLS
+- `port`: dedicated TLS/WebSocket listen port for browser access (separate from `listen` tcp/quic port)
 
 Notes:
 - `forge_auth` is optional. Set it only if your forge registration endpoint requires access token.
