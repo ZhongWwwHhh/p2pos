@@ -1,0 +1,91 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Generate version
+        id: version
+        run: |
+          VERSION=$(date -u +'%Y%m%d-%H%M')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+
+  build:
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            output_name: p2pos-win.exe
+          - goos: linux
+            goarch: amd64
+            output_name: p2pos-linux
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Build for ${{ matrix.goos }}
+        run: |
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags "-X p2pos/internal/config.AppVersion=${{ needs.version.outputs.version }}" -o ${{ matrix.output_name }} main.go
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_name }}
+          path: ${{ matrix.output_name }}
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: List downloaded files
+        run: find . -type f -name "p2pos*" | head -20
+
+      - name: Create Git tag and push
+        continue-on-error: true
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag ${{ needs.version.outputs.tag }} || true
+          git push origin ${{ needs.version.outputs.tag }} || true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ github.ref_name == 'main' && format('Release {0}', needs.version.outputs.version) || format('Pre-release {0}', needs.version.outputs.version) }}
+          files: |
+            p2pos-win.exe/p2pos-win.exe
+            p2pos-linux/p2pos-linux
+          draft: false
+          prerelease: ${{ github.ref_name != 'main' }}

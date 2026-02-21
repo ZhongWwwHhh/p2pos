@@ -1,0 +1,9 @@
+node_modules
+dist
+.wrangler
+.env
+.env.*
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+*.local
