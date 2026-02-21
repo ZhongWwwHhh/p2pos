@@ -73,13 +73,60 @@
         </div>
         <div class="hint">当前快照仅生成本地 JSON，签名与推送走浏览器 libp2p。</div>
       </section>
+
+      <section class="card">
+        <h2>Status</h2>
+        <div class="row">
+          <button class="btn" :disabled="!client || statusLoading" @click="loadClusterStatus">Fetch Cluster Status</button>
+          <button class="btn secondary" :disabled="!client" @click="toggleStatusAutoRefresh">
+            {{ statusAutoRefresh ? "Stop Auto Refresh" : "Start Auto Refresh" }}
+          </button>
+        </div>
+        <div class="hint" style="margin-top: 8px;">
+          generated_at: {{ statusGeneratedAt || "-" }} | peers: {{ statusPeers.length }}
+        </div>
+        <div v-if="statusError" class="error">{{ statusError }}</div>
+
+        <div class="status-table-wrap" style="margin-top: 12px;">
+          <table class="status-table">
+            <thead>
+              <tr>
+                <th>peer_id</th>
+                <th>reachability</th>
+                <th>last_seen_at</th>
+                <th>observed_by</th>
+                <th>last_remote_addr</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="peer in statusPeers" :key="peer.peer_id">
+                <td>{{ peer.peer_id }}</td>
+                <td>{{ peer.reachability }}</td>
+                <td>{{ peer.last_seen_at }}</td>
+                <td>{{ peer.observed_by }}</td>
+                <td>{{ peer.last_remote_addr }}</td>
+              </tr>
+              <tr v-if="statusPeers.length === 0">
+                <td colspan="5">No status records.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { connect, createClient, pushMembershipSnapshot, type Libp2pClient } from "./libp2p";
+import { computed, onUnmounted, ref } from "vue";
+import {
+  connect,
+  createClient,
+  fetchClusterStatus,
+  pushMembershipSnapshot,
+  type Libp2pClient,
+  type StatusRecord
+} from "./libp2p";
 import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import { base36 } from "multiformats/bases/base36";
@@ -98,6 +145,12 @@ const issuedAt = ref(new Date().toISOString());
 const client = ref<Libp2pClient | null>(null);
 const connectError = ref("");
 const connectedAddr = ref("");
+const statusPeers = ref<StatusRecord[]>([]);
+const statusGeneratedAt = ref("");
+const statusError = ref("");
+const statusLoading = ref(false);
+const statusAutoRefresh = ref(false);
+let statusTimer: ReturnType<typeof setInterval> | null = null;
 
 type AdminProof = {
   cluster_id: string;
@@ -261,6 +314,7 @@ const disconnectNode = async () => {
   client.value = null;
   connectedAddr.value = "";
   runtimeState.value = "unconfigured";
+  stopStatusAutoRefresh();
 };
 
 const publishSnapshot = async () => {
@@ -284,6 +338,54 @@ const publishSnapshot = async () => {
     connectError.value = formatUnknownError(err, "publish failed");
   }
 };
+
+const loadClusterStatus = async () => {
+  if (!client.value) return;
+  statusError.value = "";
+  statusLoading.value = true;
+  try {
+    const addr = connectedAddr.value || normalizedBootstrapAddr.value;
+    if (!addr) {
+      throw new Error("bootstrap address is empty");
+    }
+    const resp = await fetchClusterStatus(client.value, addr);
+    if (resp.error && resp.error.trim() !== "") {
+      throw new Error(resp.error);
+    }
+    statusGeneratedAt.value = resp.generated_at || "";
+    statusPeers.value = resp.peers ?? [];
+  } catch (err) {
+    statusError.value = formatUnknownError(err, "status fetch failed");
+  } finally {
+    statusLoading.value = false;
+  }
+};
+
+const toggleStatusAutoRefresh = () => {
+  if (statusAutoRefresh.value) {
+    stopStatusAutoRefresh();
+    return;
+  }
+  if (!client.value) return;
+  statusAutoRefresh.value = true;
+  void loadClusterStatus();
+  statusTimer = setInterval(() => {
+    if (!client.value) return;
+    void loadClusterStatus();
+  }, 15000);
+};
+
+function stopStatusAutoRefresh() {
+  statusAutoRefresh.value = false;
+  if (statusTimer !== null) {
+    clearInterval(statusTimer);
+    statusTimer = null;
+  }
+}
+
+onUnmounted(() => {
+  stopStatusAutoRefresh();
+});
 
 async function buildSignedSnapshot(): Promise<MembershipSnapshot> {
   const proof = parseAdminProof(adminProofJson.value);

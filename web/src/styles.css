@@ -153,6 +153,33 @@ textarea {
   margin-top: 8px;
 }
 
+.status-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.status-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.status-table th,
+.status-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.status-table th {
+  color: var(--muted);
+  background: #0f151d;
+  position: sticky;
+  top: 0;
+}
+
 @media (max-width: 720px) {
   .page {
     padding: 28px 16px 48px;
