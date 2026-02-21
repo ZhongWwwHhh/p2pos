@@ -154,6 +154,7 @@ cat > "${CONFIG_FILE}" << EOF
     "cache_dir": ".autotls-cache",
     "forge_auth": ""
   },
+  "update_channel": "stable",
   "cluster_id": "${INPUT_CLUSTER}",
   "system_pubkey": "${SYSTEM_PUB_KEY}",
   "members": [],

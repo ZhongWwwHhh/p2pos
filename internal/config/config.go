@@ -23,6 +23,7 @@ type Config struct {
 	Listen          ListenConfig  `json:"listen"`
 	NetworkMode     string        `json:"network_mode"`
 	AutoTLS         AutoTLSConfig `json:"auto_tls"`
+	UpdateChannel   string        `json:"update_channel"`
 	UpdateFeedURL   string        `json:"update_feed_url"`
 	NodePrivateKey  string        `json:"node_private_key"`
 	ClusterID       string        `json:"cluster_id"`
@@ -89,6 +90,7 @@ type Store struct {
 
 const defaultConfigPath = "config.json"
 const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/p2pos/releases/latest"
+const defaultUpdateChannel = "stable"
 const defaultNetworkMode = "auto"
 const defaultClusterID = "default"
 const defaultAutoTLSCacheDir = ".autotls-cache"
@@ -108,6 +110,7 @@ func Default() Config {
 		Listen:        ListenConfig{"0.0.0.0:4100", "[::]:4100"},
 		NetworkMode:   defaultNetworkMode,
 		AutoTLS:       AutoTLSConfig{Mode: defaultAutoTLSMode, Port: defaultAutoTLSPort, CacheDir: defaultAutoTLSCacheDir},
+		UpdateChannel: defaultUpdateChannel,
 		UpdateFeedURL: defaultUpdateFeedURL,
 		ClusterID:     defaultClusterID,
 	}
@@ -196,6 +199,12 @@ func (s *Store) AutoTLSForgeAuth() string {
 	return s.cfg.AutoTLS.ForgeAuth
 }
 
+func (s *Store) UpdateChannel() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.UpdateChannel
+}
+
 func (s *Store) AdminProof() (*membership.AdminProof, bool, error) {
 	s.mu.RLock()
 	raw := s.cfg.AdminProof
@@ -266,6 +275,15 @@ func normalize(cfg Config) Config {
 	}
 	if strings.TrimSpace(cfg.UpdateFeedURL) == "" {
 		cfg.UpdateFeedURL = defaultUpdateFeedURL
+	}
+	channel := strings.ToLower(strings.TrimSpace(cfg.UpdateChannel))
+	switch channel {
+	case "", "stable":
+		cfg.UpdateChannel = defaultUpdateChannel
+	case "develop":
+		cfg.UpdateChannel = "develop"
+	default:
+		cfg.UpdateChannel = defaultUpdateChannel
 	}
 	cfg.NodePrivateKey = strings.TrimSpace(cfg.NodePrivateKey)
 	cfg.SystemPubKey = strings.TrimSpace(cfg.SystemPubKey)

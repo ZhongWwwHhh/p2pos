@@ -83,9 +83,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: Release ${{ needs.version.outputs.version }}
+          name: ${{ github.ref_name == 'main' && format('Release {0}', needs.version.outputs.version) || format('Pre-release {0}', needs.version.outputs.version) }}
           files: |
             p2pos-win.exe/p2pos-win.exe
             p2pos-linux/p2pos-linux
           draft: false
-          prerelease: false
+          prerelease: ${{ github.ref_name != 'main' }}

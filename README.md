@@ -71,6 +71,7 @@ Example `config.json`:
     "cache_dir": ".autotls-cache",
     "forge_auth": ""
   },
+  "update_channel": "stable",
   "cluster_id": "default",
   "system_pubkey": "",
   "members": [],
@@ -86,6 +87,10 @@ Example `config.json`:
   "update_feed_url": "https://api.github.com/repos/ZhongWwwHhh/p2pos/releases/latest"
 }
 ```
+
+`update_channel`:
+- `stable`: 只跟踪正式 Release（不含 pre-release）
+- `develop`: 允许跟踪 pre-release（优先读取 GitHub releases 列表）
 
 ## Bootstrap DNS TXT
 

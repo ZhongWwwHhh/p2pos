@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -24,6 +25,7 @@ type Service struct {
 
 type FeedURLProvider interface {
 	UpdateFeedURL() (string, error)
+	UpdateChannel() string
 }
 
 type ShutdownRequester interface {
@@ -39,7 +41,9 @@ func NewService(configProvider FeedURLProvider, shutdown ShutdownRequester) *Ser
 
 // GithubRelease represents a GitHub release
 type GithubRelease struct {
-	TagName string `json:"tag_name"`
+	TagName    string `json:"tag_name"`
+	Prerelease bool   `json:"prerelease"`
+	Draft      bool   `json:"draft"`
 	Assets  []struct {
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
@@ -47,20 +51,10 @@ type GithubRelease struct {
 }
 
 // GetLatestVersion fetches latest release metadata from configured feed URL.
-func GetLatestVersion(feedURL string) (string, string, error) {
-	resp, err := http.Get(feedURL)
+func GetLatestVersion(feedURL, channel string) (string, string, error) {
+	release, err := pickRelease(feedURL, channel)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch release feed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("release feed returned status %d", resp.StatusCode)
-	}
-
-	var release GithubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", "", fmt.Errorf("failed to parse GitHub release: %w", err)
+		return "", "", err
 	}
 
 	// Get the appropriate binary for current OS
@@ -78,6 +72,103 @@ func GetLatestVersion(feedURL string) (string, string, error) {
 	}
 
 	return release.TagName, downloadURL, nil
+}
+
+func pickRelease(feedURL, channel string) (GithubRelease, error) {
+	ch := strings.ToLower(strings.TrimSpace(channel))
+	if ch == "" {
+		ch = "stable"
+	}
+
+	if ch == "develop" {
+		if listURL, ok := toGitHubReleasesListURL(feedURL); ok {
+			releases, err := fetchReleaseList(listURL)
+			if err == nil {
+				for _, r := range releases {
+					if r.Draft {
+						continue
+					}
+					return r, nil
+				}
+			}
+		}
+	}
+
+	// Stable path (or develop fallback): use feedURL release payload.
+	release, err := fetchSingleRelease(feedURL)
+	if err == nil {
+		if release.Draft || (ch == "stable" && release.Prerelease) {
+			return GithubRelease{}, fmt.Errorf("release %s not allowed for channel %s", release.TagName, ch)
+		}
+		return release, nil
+	}
+
+	// Fallback: if feed URL actually returns a list, pick according to channel.
+	releases, listErr := fetchReleaseList(feedURL)
+	if listErr != nil {
+		return GithubRelease{}, fmt.Errorf("failed to fetch release feed: %w", err)
+	}
+	for _, r := range releases {
+		if r.Draft {
+			continue
+		}
+		if ch == "stable" && r.Prerelease {
+			continue
+		}
+		return r, nil
+	}
+
+	return GithubRelease{}, fmt.Errorf("no eligible release found for channel %s", ch)
+}
+
+func fetchSingleRelease(feedURL string) (GithubRelease, error) {
+	resp, err := http.Get(feedURL)
+	if err != nil {
+		return GithubRelease{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return GithubRelease{}, fmt.Errorf("release feed returned status %d", resp.StatusCode)
+	}
+	var release GithubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return GithubRelease{}, err
+	}
+	return release, nil
+}
+
+func fetchReleaseList(feedURL string) ([]GithubRelease, error) {
+	resp, err := http.Get(feedURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("release feed returned status %d", resp.StatusCode)
+	}
+	var releases []GithubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, err
+	}
+	return releases, nil
+}
+
+func toGitHubReleasesListURL(feedURL string) (string, bool) {
+	u, err := url.Parse(feedURL)
+	if err != nil {
+		return "", false
+	}
+	if u.Host != "api.github.com" {
+		return "", false
+	}
+	if !strings.HasSuffix(u.Path, "/releases/latest") {
+		return "", false
+	}
+	u.Path = strings.TrimSuffix(u.Path, "/latest")
+	q := u.Query()
+	q.Set("per_page", "20")
+	u.RawQuery = q.Encode()
+	return u.String(), true
 }
 
 func getBinaryName() string {
@@ -186,8 +277,8 @@ func DownloadBinary(url, targetPath string) error {
 }
 
 // CheckAndUpdate checks for updates and applies them if available.
-func CheckAndUpdate(feedURL string) (bool, error) {
-	latestVersion, downloadURL, err := GetLatestVersion(feedURL)
+func CheckAndUpdate(feedURL, channel string) (bool, error) {
+	latestVersion, downloadURL, err := GetLatestVersion(feedURL, channel)
 	if err != nil {
 		return false, fmt.Errorf("failed to check for updates: %w", err)
 	}
@@ -237,9 +328,12 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load update feed url failed: %w", err)
 	}
+	channel := s.configProvider.UpdateChannel()
 
-	logging.Log("UPDATE", "check", nil)
-	updated, err := CheckAndUpdate(feedURL)
+	logging.Log("UPDATE", "check", map[string]string{
+		"channel": channel,
+	})
+	updated, err := CheckAndUpdate(feedURL, channel)
 	if err != nil {
 		return fmt.Errorf("check failed: %w", err)
 	}
