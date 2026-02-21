@@ -39,6 +39,7 @@ func (n *Node) registerMembershipPushHandler() {
 			return
 		}
 
+		before := manager.Snapshot().IssuedAt
 		if err := manager.Apply(snapshot); err != nil {
 			logging.Log("MEMBERSHIP", "reject_snapshot", map[string]string{
 				"peer_id": snapshot.IssuerPeerID,
@@ -47,14 +48,24 @@ func (n *Node) registerMembershipPushHandler() {
 			_ = json.NewEncoder(stream).Encode(membershipPushResponse{Applied: false, Error: err.Error()})
 			return
 		}
+		after := manager.Snapshot().IssuedAt
 
 		logging.Log("MEMBERSHIP", "apply_snapshot_push", map[string]string{
 			"peer_id":   snapshot.IssuerPeerID,
 			"issued_at": snapshot.IssuedAt.UTC().Format(time.RFC3339Nano),
 			"members":   fmt.Sprintf("%d", len(snapshot.Members)),
 		})
+		if after.After(before) {
+			n.notifyMembershipApplied(manager.Snapshot())
+		}
 		n.evaluateRuntimeState("membership-push")
 		_ = json.NewEncoder(stream).Encode(membershipPushResponse{Applied: true})
+
+		// Propagate only when the pusher is the snapshot issuer to avoid endless relay loops.
+		// This covers admin->node direct push from Web Admin and gives one-hop fanout.
+		if stream.Conn() != nil && stream.Conn().RemotePeer().String() == snapshot.IssuerPeerID {
+			n.fanoutSnapshot(stream.Conn().RemotePeer(), snapshot)
+		}
 	})
 }
 
@@ -96,6 +107,7 @@ func (n *Node) PublishMembershipSnapshot(ctx context.Context, members []string) 
 	if err := manager.Apply(signed); err != nil {
 		return err
 	}
+	n.notifyMembershipApplied(manager.Snapshot())
 
 	for _, peerID := range n.Host.Network().Peers() {
 		if err := n.pushSnapshot(ctx, peerID, signed); err != nil {
@@ -107,6 +119,20 @@ func (n *Node) PublishMembershipSnapshot(ctx context.Context, members []string) 
 	}
 
 	return nil
+}
+
+func (n *Node) fanoutSnapshot(source peerstore.ID, snapshot membership.Snapshot) {
+	for _, peerID := range n.Host.Network().Peers() {
+		if peerID == source {
+			continue
+		}
+		if err := n.pushSnapshot(context.Background(), peerID, snapshot); err != nil {
+			logging.Log("MEMBERSHIP", "fanout_failed", map[string]string{
+				"peer_id": peerID.String(),
+				"reason":  err.Error(),
+			})
+		}
+	}
 }
 
 func (n *Node) pushSnapshot(ctx context.Context, peerID peerstore.ID, snapshot membership.Snapshot) error {

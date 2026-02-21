@@ -119,6 +119,13 @@ func setupMembership(cfg *config.Store, node *network.Node) error {
 		}
 		node.SetAdminProof(proof)
 	}
+	node.SetMembershipAppliedHandler(func(snapshot membership.Snapshot) {
+		if err := cfg.PersistMembers(snapshot.Members); err != nil {
+			logging.Log("CONFIG", "persist_members_failed", map[string]string{
+				"reason": err.Error(),
+			})
+		}
+	})
 	node.SetMembershipManager(manager)
 	return nil
 }

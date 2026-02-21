@@ -33,20 +33,22 @@ import (
 )
 
 type Node struct {
-	Host        host.Host
-	PingService *ping.PingService
-	Tracker     *Tracker
-	bus         *events.Bus
-	memberMu    sync.RWMutex
-	membership  *membership.Manager
-	state       stateHolder
-	statusMu    sync.RWMutex
-	status      StatusProvider
-	privKey     crypto.PrivKey
-	adminProof  *membership.AdminProof
-	autoTLSMgr  *p2pforge.P2PForgeCertMgr
-	closeOnce   sync.Once
-	closeErr    error
+	Host                 host.Host
+	PingService          *ping.PingService
+	Tracker              *Tracker
+	bus                  *events.Bus
+	memberMu             sync.RWMutex
+	membership           *membership.Manager
+	onMembershipApplied  func(snapshot membership.Snapshot)
+	heartbeatUnsupported sync.Map
+	state                stateHolder
+	statusMu             sync.RWMutex
+	status               StatusProvider
+	privKey              crypto.PrivKey
+	adminProof           *membership.AdminProof
+	autoTLSMgr           *p2pforge.P2PForgeCertMgr
+	closeOnce            sync.Once
+	closeErr             error
 }
 
 type ListenProvider interface {
@@ -371,6 +373,12 @@ func (n *Node) SetMembershipManager(manager *membership.Manager) {
 	n.evaluateRuntimeState("membership-set")
 }
 
+func (n *Node) SetMembershipAppliedHandler(fn func(snapshot membership.Snapshot)) {
+	n.memberMu.Lock()
+	n.onMembershipApplied = fn
+	n.memberMu.Unlock()
+}
+
 func (n *Node) SetAdminProof(proof *membership.AdminProof) {
 	n.memberMu.Lock()
 	n.adminProof = proof
@@ -502,6 +510,7 @@ func (n *Node) StartShutdownHandler(ctx context.Context) {
 func (n *Node) registerConnectionNotifications() {
 	n.Host.Network().Notify(&libp2pnet.NotifyBundle{
 		ConnectedF: func(_ libp2pnet.Network, conn libp2pnet.Conn) {
+			n.heartbeatUnsupported.Delete(conn.RemotePeer())
 			if !n.allowPeer(conn.RemotePeer().String()) {
 				logging.Log("NODE", "reject_peer", map[string]string{
 					"peer_id": conn.RemotePeer().String(),

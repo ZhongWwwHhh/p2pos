@@ -237,6 +237,23 @@ func (s *Store) Update(next Config) error {
 	return nil
 }
 
+func (s *Store) PersistMembers(members []string) error {
+	normalizedMembers := dedupeTrimmed(members)
+
+	s.mu.Lock()
+	next := s.cfg
+	if stringSliceEqual(next.Members, normalizedMembers) {
+		s.mu.Unlock()
+		return nil
+	}
+	next.Members = normalizedMembers
+	s.cfg = next
+	path := s.path
+	s.mu.Unlock()
+
+	return saveToFile(path, next)
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -353,6 +370,18 @@ func dedupeTrimmed(in []string) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) UpdateFeedURL() (string, error) {

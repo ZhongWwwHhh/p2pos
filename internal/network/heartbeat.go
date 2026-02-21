@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"p2pos/internal/events"
@@ -88,8 +89,19 @@ func (n *Node) BroadcastHeartbeat(ctx context.Context) error {
 		if !n.isMember(peerID.String()) {
 			continue
 		}
+		if _, skip := n.heartbeatUnsupported.Load(peerID); skip {
+			continue
+		}
 		reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		if err := n.sendHeartbeat(reqCtx, peerID, msg); err != nil {
+			if strings.Contains(err.Error(), "protocols not supported") {
+				n.heartbeatUnsupported.Store(peerID, struct{}{})
+				logging.Log("STATUS", "heartbeat_protocol_unsupported", map[string]string{
+					"peer_id": peerID.String(),
+				})
+				cancel()
+				continue
+			}
 			logging.Log("STATUS", "heartbeat_send_failed", map[string]string{
 				"peer_id": peerID.String(),
 				"reason":  err.Error(),
