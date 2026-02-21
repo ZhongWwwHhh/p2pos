@@ -266,6 +266,9 @@ const disconnectNode = async () => {
 const publishSnapshot = async () => {
   if (!client.value) return;
   try {
+    // Ensure each publish uses a strictly newer issued_at.
+    issuedAt.value = new Date().toISOString();
+
     const addr = connectedAddr.value || normalizedBootstrapAddr.value;
     if (!addr) {
       throw new Error("bootstrap address is empty");
