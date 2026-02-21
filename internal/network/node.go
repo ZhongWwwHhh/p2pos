@@ -41,6 +41,7 @@ type Node struct {
 	membership           *membership.Manager
 	onMembershipApplied  func(snapshot membership.Snapshot)
 	heartbeatUnsupported sync.Map
+	statusUnsupported    sync.Map
 	state                stateHolder
 	statusMu             sync.RWMutex
 	status               StatusProvider
@@ -511,6 +512,7 @@ func (n *Node) registerConnectionNotifications() {
 	n.Host.Network().Notify(&libp2pnet.NotifyBundle{
 		ConnectedF: func(_ libp2pnet.Network, conn libp2pnet.Conn) {
 			n.heartbeatUnsupported.Delete(conn.RemotePeer())
+			n.statusUnsupported.Delete(conn.RemotePeer())
 			if !n.allowPeer(conn.RemotePeer().String()) {
 				logging.Log("NODE", "reject_peer", map[string]string{
 					"peer_id": conn.RemotePeer().String(),
