@@ -9,6 +9,7 @@ import { fromString, toString } from "uint8arrays";
 import { concat } from "uint8arrays/concat";
 
 const MEMBERSHIP_PUSH_PROTOCOL = "/p2pos/membership-push/1.0.0";
+const MEMBERSHIP_PROTOCOL = "/p2pos/membership/1.0.0";
 const STATUS_PROTOCOL = "/p2pos/status/1.0.0";
 
 export type Libp2pClient = Awaited<ReturnType<typeof createLibp2p>>;
@@ -53,6 +54,38 @@ export async function pushMembershipSnapshot(
   const response = toString(concat(chunks));
 
   return response;
+}
+
+export type MembershipSnapshot = {
+  cluster_id: string;
+  issued_at: string;
+  issuer_peer_id: string;
+  members: string[];
+  admin_proof: Record<string, unknown>;
+  sig: string;
+};
+
+export type MembershipResponse = {
+  snapshot?: MembershipSnapshot;
+  error?: string;
+};
+
+export async function fetchMembershipSnapshot(
+  node: Libp2pClient,
+  peerAddr: string
+): Promise<MembershipResponse> {
+  const stream = await node.dialProtocol(multiaddr(peerAddr), MEMBERSHIP_PROTOCOL);
+  await stream.close();
+
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk.subarray());
+  }
+  const raw = toString(concat(chunks));
+  if (raw.trim() === "") {
+    throw new Error("empty membership response");
+  }
+  return JSON.parse(raw) as MembershipResponse;
 }
 
 export type StatusRecord = {

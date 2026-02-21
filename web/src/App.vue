@@ -122,6 +122,7 @@ import { computed, onUnmounted, ref } from "vue";
 import {
   connect,
   createClient,
+  fetchMembershipSnapshot,
   fetchClusterStatus,
   pushMembershipSnapshot,
   type Libp2pClient,
@@ -303,6 +304,7 @@ const connectNode = async () => {
     connectedAddr.value = connected;
     bootstrapAddr.value = connected;
     runtimeState.value = "connected";
+    await hydrateMembershipFromNode(node, connected);
   } catch (err) {
     connectError.value = formatUnknownError(err, "connect failed");
   }
@@ -336,6 +338,30 @@ const publishSnapshot = async () => {
     runtimeState.value = "healthy";
   } catch (err) {
     connectError.value = formatUnknownError(err, "publish failed");
+  }
+};
+
+const hydrateMembershipFromNode = async (node: Libp2pClient, addr: string) => {
+  try {
+    const resp = await fetchMembershipSnapshot(node, addr);
+    if (resp.error && resp.error.trim() !== "") {
+      return;
+    }
+    if (!resp.snapshot) {
+      return;
+    }
+
+    if (typeof resp.snapshot.cluster_id === "string" && resp.snapshot.cluster_id.trim() !== "") {
+      clusterId.value = resp.snapshot.cluster_id.trim();
+    }
+    if (Array.isArray(resp.snapshot.members)) {
+      members.value = normalizeMembers(resp.snapshot.members);
+    }
+    if (typeof resp.snapshot.issued_at === "string" && resp.snapshot.issued_at.trim() !== "") {
+      issuedAt.value = resp.snapshot.issued_at;
+    }
+  } catch {
+    // Non-fatal: keep current local list when remote membership fetch fails.
   }
 };
 
