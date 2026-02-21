@@ -35,9 +35,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - goos: windows
-            goarch: amd64
-            output_name: p2pos-win.exe
           - goos: linux
             goarch: amd64
             output_name: p2pos-linux
@@ -91,7 +88,6 @@ jobs:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Release ${{ needs.version.outputs.version }}
           files: |
-            p2pos-win.exe/p2pos-win.exe
             p2pos-linux/p2pos-linux
           draft: false
           prerelease: false
@@ -125,7 +121,6 @@ jobs:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Pre-release ${{ needs.version.outputs.version }}
           files: |
-            p2pos-win.exe/p2pos-win.exe
             p2pos-linux/p2pos-linux
           draft: false
           prerelease: true
