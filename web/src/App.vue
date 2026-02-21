@@ -80,7 +80,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { connect, createClient, pushMembershipSnapshot, type Libp2pClient } from "./libp2p";
-import { peerIdFromString } from "@libp2p/peer-id";
+import { peerIdFromPrivateKey, peerIdFromString } from "@libp2p/peer-id";
+import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import { base36 } from "multiformats/bases/base36";
 
 const bootstrapAddr = ref("/dns4/init.p2pos.zhongwwwhhh.cc/tcp/4100/p2p/");
@@ -113,6 +114,15 @@ type AdminBundle = {
   bootstrap: string;
   admin_priv: string;
   admin_proof: AdminProof;
+};
+
+type MembershipSnapshot = {
+  cluster_id: string;
+  issued_at: string;
+  issuer_peer_id: string;
+  members: string[];
+  admin_proof: AdminProof;
+  sig: string;
 };
 
 const addMember = () => {
@@ -214,19 +224,31 @@ const connectNode = async () => {
     if (!addr) {
       throw new Error("bootstrap address is empty");
     }
-    if (
-      !addr.startsWith("/dnsaddr/") &&
-      !addr.includes("/ws") &&
-      !addr.includes("/wss") &&
-      !addr.includes("/webtransport")
-    ) {
-      throw new Error("bootstrap address must be ws/wss/webtransport for browser libp2p");
+
+    const candidates = await resolveBootstrapCandidates(addr);
+    if (candidates.length === 0) {
+      throw new Error("no browser-compatible bootstrap address found");
     }
+
     const node = await createClient(adminPrivKey.value.trim());
-    await connect(node, addr);
+    let connected = "";
+    let lastErr = "";
+    for (const candidate of candidates) {
+      try {
+        await connect(node, candidate);
+        connected = candidate;
+        break;
+      } catch (err) {
+        lastErr = formatUnknownError(err, "connect failed");
+      }
+    }
+    if (!connected) {
+      await node.stop();
+      throw new Error(lastErr || "connect failed");
+    }
     client.value = node;
-    connectedAddr.value = addr;
-    bootstrapAddr.value = addr;
+    connectedAddr.value = connected;
+    bootstrapAddr.value = connected;
     runtimeState.value = "connected";
   } catch (err) {
     connectError.value = formatUnknownError(err, "connect failed");
@@ -248,12 +270,71 @@ const publishSnapshot = async () => {
     if (!addr) {
       throw new Error("bootstrap address is empty");
     }
-    await pushMembershipSnapshot(client.value, addr, snapshotJson.value);
+    const snapshot = await buildSignedSnapshot();
+    const rawResp = await pushMembershipSnapshot(client.value, addr, JSON.stringify(snapshot));
+    const resp = parsePushResponse(rawResp);
+    if (!resp.applied) {
+      throw new Error(resp.error || "snapshot rejected");
+    }
     runtimeState.value = "healthy";
   } catch (err) {
     connectError.value = formatUnknownError(err, "publish failed");
   }
 };
+
+async function buildSignedSnapshot(): Promise<MembershipSnapshot> {
+  const proof = parseAdminProof(adminProofJson.value);
+  if (!proof) {
+    throw new Error("admin proof invalid");
+  }
+
+  const cluster = clusterId.value.trim() || "default";
+  if (proof.cluster_id !== cluster) {
+    throw new Error("admin proof cluster_id mismatch");
+  }
+
+  const issuedDate = new Date(issuedAt.value);
+  if (Number.isNaN(issuedDate.getTime())) {
+    throw new Error("issued_at invalid");
+  }
+  const issuedAtRFC3339Nano = formatRFC3339NanoUTC(issuedDate);
+
+  const priv = privateKeyFromProtobuf(base64ToUint8(adminPrivKey.value.trim()));
+  const issuerPeerID = peerIdFromPrivateKey(priv).toString();
+  if (proof.peer_id !== issuerPeerID) {
+    throw new Error("admin proof peer_id does not match private key");
+  }
+
+  const normalizedMembers = normalizeMembers(members.value);
+  if (normalizedMembers.length === 0) {
+    throw new Error("members is empty");
+  }
+
+  const canonical = `${cluster}|${issuedAtRFC3339Nano}|${issuerPeerID}|${normalizedMembers.join(",")}`;
+  const sigBytes = await Promise.resolve(priv.sign(new TextEncoder().encode(canonical)));
+
+  return {
+    cluster_id: cluster,
+    issued_at: issuedAtRFC3339Nano,
+    issuer_peer_id: issuerPeerID,
+    members: normalizedMembers,
+    admin_proof: proof,
+    sig: uint8ToBase64(sigBytes)
+  };
+}
+
+function parsePushResponse(raw: string): { applied: boolean; error?: string } {
+  const text = raw.trim();
+  if (text === "") {
+    return { applied: true };
+  }
+  try {
+    const obj = JSON.parse(text) as { applied?: boolean; error?: string };
+    return { applied: obj.applied === true, error: obj.error };
+  } catch {
+    return { applied: false, error: text };
+  }
+}
 
 function parseAdminProof(raw: string): AdminProof | null {
   try {
@@ -281,6 +362,52 @@ function isBase64(val: string): boolean {
   } catch {
     return false;
   }
+}
+
+function base64ToUint8(val: string): Uint8Array {
+  const bin = atob(val);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+function uint8ToBase64(data: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < data.length; i++) {
+    bin += String.fromCharCode(data[i]);
+  }
+  return btoa(bin);
+}
+
+function normalizeMembers(values: string[]): string[] {
+  const uniq = new Set<string>();
+  for (const raw of values) {
+    const v = raw.trim();
+    if (v !== "") {
+      uniq.add(v);
+    }
+  }
+  return Array.from(uniq).sort();
+}
+
+function formatRFC3339NanoUTC(d: Date): string {
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const year = d.getUTCFullYear();
+  const month = pad2(d.getUTCMonth() + 1);
+  const day = pad2(d.getUTCDate());
+  const hour = pad2(d.getUTCHours());
+  const min = pad2(d.getUTCMinutes());
+  const sec = pad2(d.getUTCSeconds());
+  const ms = d.getUTCMilliseconds();
+
+  if (ms === 0) {
+    return `${year}-${month}-${day}T${hour}:${min}:${sec}Z`;
+  }
+
+  const nanos = String(ms * 1_000_000).padStart(9, "0").replace(/0+$/, "");
+  return `${year}-${month}-${day}T${hour}:${min}:${sec}.${nanos}Z`;
 }
 
 function normalizeBootstrapAddr(raw: string): string {
@@ -382,5 +509,86 @@ function formatUnknownError(err: unknown, fallback: string): string {
     // ignore
   }
   return fallback;
+}
+
+async function resolveBootstrapCandidates(addr: string): Promise<string[]> {
+  const value = addr.trim();
+  if (value === "") {
+    return [];
+  }
+
+  if (!value.startsWith("/dnsaddr/")) {
+    if (isBrowserTransportAddr(value)) {
+      return [value];
+    }
+    throw new Error("bootstrap address must be ws/wss/webtransport for browser libp2p");
+  }
+
+  const domain = value.slice("/dnsaddr/".length).trim();
+  if (domain === "") {
+    throw new Error("dnsaddr domain is empty");
+  }
+
+  const txtRecords = await lookupTXTCloudflare(`_dnsaddr.${domain}`);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const record of txtRecords) {
+    let v = record.trim();
+    if (v.startsWith("dnsaddr=")) {
+      v = v.slice("dnsaddr=".length).trim();
+    }
+    if (v === "") {
+      continue;
+    }
+    const normalized = normalizeBootstrapAddr(v);
+    if (!isBrowserTransportAddr(normalized)) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function isBrowserTransportAddr(addr: string): boolean {
+  return addr.includes("/ws") || addr.includes("/wss") || addr.includes("/webtransport");
+}
+
+async function lookupTXTCloudflare(name: string): Promise<string[]> {
+  const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=TXT`;
+  const res = await fetch(url, {
+    headers: {
+      accept: "application/dns-json"
+    }
+  });
+  if (!res.ok) {
+    throw new Error(`cloudflare doh http ${res.status}`);
+  }
+  const body = (await res.json()) as {
+    Status?: number;
+    Answer?: Array<{ type?: number; data?: string }>;
+  };
+  if ((body.Status ?? 0) !== 0) {
+    throw new Error(`cloudflare doh dns status ${body.Status ?? -1}`);
+  }
+  const answers = body.Answer ?? [];
+  const out: string[] = [];
+  for (const ans of answers) {
+    if (ans.type !== 16 || typeof ans.data !== "string") {
+      continue;
+    }
+    let data = ans.data.trim();
+    if (data.startsWith('"') && data.endsWith('"') && data.length >= 2) {
+      data = data.slice(1, -1);
+    }
+    data = data.replaceAll('\\"', '"').trim();
+    if (data !== "") {
+      out.push(data);
+    }
+  }
+  return out;
 }
 </script>

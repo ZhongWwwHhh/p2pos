@@ -2,9 +2,9 @@ import { createLibp2p } from "libp2p";
 import { webSockets } from "@libp2p/websockets";
 import { noise } from "@chainsafe/libp2p-noise";
 import { mplex } from "@libp2p/mplex";
+import { yamux } from "@chainsafe/libp2p-yamux";
 import { privateKeyFromProtobuf } from "@libp2p/crypto/keys";
 import { multiaddr } from "@multiformats/multiaddr";
-import { pipe } from "it-pipe";
 import { fromString, toString } from "uint8arrays";
 import { concat } from "uint8arrays/concat";
 
@@ -20,7 +20,7 @@ export async function createClient(privKeyB64: string) {
     privateKey: privKey,
     transports: [webSockets()],
     connectionEncrypters: [noise()],
-    streamMuxers: [mplex()]
+    streamMuxers: [yamux(), mplex()]
   });
 
   await node.start();
@@ -40,12 +40,13 @@ export async function pushMembershipSnapshot(
   peerAddr: string,
   snapshotJson: string
 ) {
-  const { stream } = await node.dialProtocol(multiaddr(peerAddr), MEMBERSHIP_PUSH_PROTOCOL);
+  const stream = await node.dialProtocol(multiaddr(peerAddr), MEMBERSHIP_PUSH_PROTOCOL);
 
-  await pipe([fromString(snapshotJson)], stream.sink);
+  stream.send(fromString(snapshotJson));
+  await stream.close();
 
   const chunks: Uint8Array[] = [];
-  for await (const chunk of stream.source) {
+  for await (const chunk of stream) {
     chunks.push(chunk.subarray());
   }
   const response = toString(concat(chunks));
