@@ -8,10 +8,10 @@
     <div class="grid">
       <section class="card">
         <h2>Connection</h2>
-        <label>Bootstrap Multiaddr</label>
-        <input v-model="bootstrapAddr" placeholder="/dnsaddr/init.p2pos.zhongwwwhhh.cc" />
+        <label>Bootstrap</label>
+        <input :value="bootstrapAddr || '-'" readonly />
         <div class="hint">Auto normalized: {{ normalizedBootstrapAddr || "-" }}</div>
-        <div class="hint">Cluster: {{ clusterId }}</div>
+        <div class="hint">Cluster: {{ clusterId || "-" }}</div>
 
         <div class="row">
           <button class="btn" :disabled="!canConnect" @click="connectNode">Connect</button>
@@ -23,7 +23,7 @@
           <span>State: {{ runtimeState }}</span>
         </div>
         <div v-if="connectError" class="error">{{ connectError }}</div>
-        <div class="hint">浏览器仅支持 WebSocket/WebTransport，服务端需支持对应传输。</div>
+        <div class="hint">先在 Admin Bundle 导入配置，再连接。</div>
       </section>
 
       <section class="card">

@@ -42,7 +42,7 @@ func (r *ConfigResolver) Resolve(_ context.Context) ([]peerstore.AddrInfo, error
 	for _, conn := range cfg.InitConnections {
 		switch conn.Type {
 		case "dns":
-			records, err := r.dns.LookupTXT(conn.Address)
+			records, err := r.lookupBootstrapTXT(conn.Address)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("dns %s query failed: %w", conn.Address, err))
 				continue
@@ -84,6 +84,25 @@ func (r *ConfigResolver) Resolve(_ context.Context) ([]peerstore.AddrInfo, error
 	}
 
 	return peers, errors.Join(errs...)
+}
+
+func (r *ConfigResolver) lookupBootstrapTXT(domain string) ([]string, error) {
+	base := strings.TrimSpace(domain)
+	if base == "" {
+		return nil, fmt.Errorf("empty dns bootstrap domain")
+	}
+
+	// Align with dnsaddr semantics used by browser libp2p:
+	// TXT records should live under _dnsaddr.<domain>.
+	if !strings.HasPrefix(base, "_dnsaddr.") {
+		prefixed := "_dnsaddr." + strings.TrimSuffix(base, ".")
+		if records, err := r.dns.LookupTXT(prefixed); err == nil && len(records) > 0 {
+			return records, nil
+		}
+	}
+
+	// Backward-compatible fallback: bare domain TXT.
+	return r.dns.LookupTXT(base)
 }
 
 func mergePeerAddrInfo(dst map[peerstore.ID]*peerstore.AddrInfo, src *peerstore.AddrInfo) {

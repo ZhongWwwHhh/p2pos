@@ -244,7 +244,7 @@ EOF
     echo -e "${YELLOW}Admin proof:${NC}"
     printf "%s\n" "${ADMIN_PROOF_JSON}"
     echo ""
-    echo -e "${YELLOW}Bootstrap DNS TXT records for ${INIT_DNS_DOMAIN}:${NC}"
+    echo -e "${YELLOW}Bootstrap DNS TXT records for _dnsaddr.${INIT_DNS_DOMAIN}:${NC}"
     echo "${TXT_TCP}"
     echo "${TXT_TLS}"
     echo ""

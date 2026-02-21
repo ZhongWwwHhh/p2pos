@@ -93,6 +93,7 @@ Example `config.json`:
 You can publish multiple bootstrap addresses for the same peer, e.g.:
 
 ```txt
+; TXT records should be set on _dnsaddr.init.p2pos.zhongwwwhhh.cc
 dnsaddr=/ip4/<PUBLIC_IPV4>/tcp/4100/p2p/<PEER_ID>
 dnsaddr=/ip4/<PUBLIC_IPV4>/tcp/4101/tls/sni/<ESCAPED_IP>.<PEER_CID36>.libp2p.direct/ws/p2p/<PEER_ID>
 ```
