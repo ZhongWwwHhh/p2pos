@@ -37,7 +37,9 @@ npm run build
 npm run deploy
 ```
 
-The worker serves static assets from `dist/` via the `ASSETS` binding (`wrangler.toml`).
+Wrangler serves static assets directly from `dist/` (`wrangler.toml` `[assets]`).
+`not_found_handling = "single-page-application"` is enabled so Vue router paths fall back to `index.html`.
+For custom domain binding, configure `workers_dev` / `routes` in `wrangler.toml`.
 
 ## Bundle Import
 

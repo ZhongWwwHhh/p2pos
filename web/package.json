@@ -10,8 +10,8 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@chainsafe/libp2p-yamux": "latest",
     "@chainsafe/libp2p-noise": "latest",
+    "@chainsafe/libp2p-yamux": "latest",
     "@libp2p/crypto": "latest",
     "@libp2p/mplex": "latest",
     "@libp2p/peer-id": "latest",
@@ -26,6 +26,6 @@
     "@vitejs/plugin-vue": "^5.1.2",
     "typescript": "^5.6.2",
     "vite": "^5.4.5",
-    "wrangler": "^3.86.1"
+    "wrangler": "^4.67.0"
   }
 }
