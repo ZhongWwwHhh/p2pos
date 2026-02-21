@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +18,8 @@ import (
 	"p2pos/internal/config"
 	"p2pos/internal/logging"
 )
+
+var versionPattern = regexp.MustCompile(`^(\d{8})-(\d{4})(-dev)?$`)
 
 type Service struct {
 	configProvider FeedURLProvider
@@ -287,7 +291,8 @@ func CheckAndUpdate(feedURL, channel string) (bool, error) {
 	currentVer := strings.TrimPrefix(config.AppVersion, "v")
 	latestVer := strings.TrimPrefix(latestVersion, "v")
 
-	if currentVer >= latestVer {
+	cmp := compareVersion(currentVer, latestVer)
+	if cmp >= 0 {
 		logging.Log("UPDATE", "already_latest", map[string]string{
 			"version": config.AppVersion,
 		})
@@ -318,6 +323,77 @@ func CheckAndUpdate(feedURL, channel string) (bool, error) {
 		"version": latestVersion,
 	})
 	return true, nil
+}
+
+type parsedVersion struct {
+	day    int
+	minute int
+	isDev  bool
+	ok     bool
+}
+
+func parseVersion(v string) parsedVersion {
+	m := versionPattern.FindStringSubmatch(strings.TrimSpace(v))
+	if len(m) != 4 {
+		return parsedVersion{ok: false}
+	}
+	day, err := strconv.Atoi(m[1])
+	if err != nil {
+		return parsedVersion{ok: false}
+	}
+	minute, err := strconv.Atoi(m[2])
+	if err != nil {
+		return parsedVersion{ok: false}
+	}
+	return parsedVersion{
+		day:    day,
+		minute: minute,
+		isDev:  m[3] == "-dev",
+		ok:     true,
+	}
+}
+
+// compareVersion returns:
+//   -1 if a < b
+//    0 if a == b
+//    1 if a > b
+//
+// Supported format: YYYYMMDD-HHMM[-dev]
+// For the same timestamp, stable is considered newer than -dev.
+func compareVersion(a, b string) int {
+	pa := parseVersion(a)
+	pb := parseVersion(b)
+
+	if pa.ok && pb.ok {
+		if pa.day != pb.day {
+			if pa.day < pb.day {
+				return -1
+			}
+			return 1
+		}
+		if pa.minute != pb.minute {
+			if pa.minute < pb.minute {
+				return -1
+			}
+			return 1
+		}
+		if pa.isDev == pb.isDev {
+			return 0
+		}
+		if pa.isDev {
+			return -1
+		}
+		return 1
+	}
+
+	// Fallback for unexpected formats: keep previous lexicographic behavior.
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
 }
 
 func (s *Service) RunOnce(ctx context.Context) error {

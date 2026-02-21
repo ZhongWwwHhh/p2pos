@@ -92,6 +92,11 @@ Example `config.json`:
 - `stable`: 只跟踪正式 Release（不含 pre-release）
 - `develop`: 允许跟踪 pre-release（优先读取 GitHub releases 列表）
 
+版本号格式：
+- 正式版：`YYYYMMDD-HHMM`
+- 开发预发布：`YYYYMMDD-HHMM-dev`
+- 自动更新比较会按时间版本解析；同一时间戳下正式版高于 `-dev`。
+
 ## Bootstrap DNS TXT
 
 `init_connections` with `"type": "dns"` supports multiple TXT records per domain.

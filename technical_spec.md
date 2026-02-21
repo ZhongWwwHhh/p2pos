@@ -35,6 +35,14 @@
   - `/p2pos/heartbeat/1.0.0`
   - `/p2pos/status/1.0.0`
 
+### 2.4 版本号
+
+- 正式版格式：`YYYYMMDD-HHMM`
+- 开发预发布格式：`YYYYMMDD-HHMM-dev`
+- 更新比较规则：
+  - 先比日期时间
+  - 同一时间戳下正式版高于 `-dev`
+
 ## 3. 配置契约（config.json）
 
 关键字段：
@@ -254,4 +262,3 @@ Web Admin resolver：
 - Web Admin 尚未实现 heartbeat 协议 handler，节点可能记录 `protocol not supported`。
 - `Revoke Snapshot` 仅 UI 占位，尚未实现协议与后端处理。
 - SQLite 在高并发写场景可能出现锁竞争，需继续优化写策略。
-

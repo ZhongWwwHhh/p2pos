@@ -124,6 +124,10 @@ systemd 默认 `Restart=always`。
 - 成员身份以 membership 快照为准，不以临时连通性为准。
 - 时间统一 UTC + RFC3339Nano。
 - 浏览器管理端使用 bundle 单输入，不做持久化后端会话。
+- 发布版本策略：
+  - `main` 产出正式版：`YYYYMMDD-HHMM`
+  - `dev` 产出预发布：`YYYYMMDD-HHMM-dev`
+  - 自动更新比较按时间语义处理，同时间戳正式版优先于 `-dev`。
 
 ## 4. 下一阶段计划
 
@@ -162,4 +166,3 @@ systemd 默认 `Restart=always`。
 - Web Admin 可导入 bundle 并连上 bootstrap。
 - 发布快照后，节点日志出现 `apply_snapshot_push`。
 - 运行态可由 `unconfigured/degraded` 转为 `healthy`（满足多数派时）。
-

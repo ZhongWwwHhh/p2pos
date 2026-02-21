@@ -20,7 +20,12 @@ jobs:
       - name: Generate version
         id: version
         run: |
-          VERSION=$(date -u +'%Y%m%d-%H%M')
+          BASE_VERSION=$(date -u +'%Y%m%d-%H%M')
+          if [ "${GITHUB_REF_NAME}" = "dev" ]; then
+            VERSION="${BASE_VERSION}-dev"
+          else
+            VERSION="${BASE_VERSION}"
+          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
 
@@ -57,9 +62,10 @@ jobs:
           name: ${{ matrix.output_name }}
           path: ${{ matrix.output_name }}
 
-  release:
+  release_main:
     needs: [version, build]
     runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout code
@@ -83,9 +89,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ github.ref_name == 'main' && format('Release {0}', needs.version.outputs.version) || format('Pre-release {0}', needs.version.outputs.version) }}
+          name: Release ${{ needs.version.outputs.version }}
           files: |
             p2pos-win.exe/p2pos-win.exe
             p2pos-linux/p2pos-linux
           draft: false
-          prerelease: ${{ github.ref_name != 'main' }}
+          prerelease: false
+
+  release_dev:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/dev'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: List downloaded files
+        run: find . -type f -name "p2pos*" | head -20
+
+      - name: Create Git tag and push
+        continue-on-error: true
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag ${{ needs.version.outputs.tag }} || true
+          git push origin ${{ needs.version.outputs.tag }} || true
+
+      - name: Create Pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Pre-release ${{ needs.version.outputs.version }}
+          files: |
+            p2pos-win.exe/p2pos-win.exe
+            p2pos-linux/p2pos-linux
+          draft: false
+          prerelease: true
