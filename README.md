@@ -9,7 +9,7 @@ P2POS is a libp2p-based cluster node with:
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ZhongWwwHhh/Ops-System/dev/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ZhongWwwHhh/p2pos/dev/install.sh | sudo bash
 ```
 
 The installer is interactive. It supports:
@@ -83,7 +83,7 @@ Example `config.json`:
     "sig": ""
   },
   "node_private_key": "",
-  "update_feed_url": "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
+  "update_feed_url": "https://api.github.com/repos/ZhongWwwHhh/p2pos/releases/latest"
 }
 ```
 

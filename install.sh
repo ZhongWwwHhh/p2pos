@@ -9,7 +9,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO="ZhongWwwHhh/Ops-System"
+REPO="ZhongWwwHhh/p2pos"
 SERVICE_NAME="p2pos"
 INSTALL_DIR="$(pwd)"
 CONFIG_FILE="${INSTALL_DIR}/config.json"

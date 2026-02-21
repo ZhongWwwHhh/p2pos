@@ -88,7 +88,7 @@ type Store struct {
 }
 
 const defaultConfigPath = "config.json"
-const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/Ops-System/releases/latest"
+const defaultUpdateFeedURL = "https://api.github.com/repos/ZhongWwwHhh/p2pos/releases/latest"
 const defaultNetworkMode = "auto"
 const defaultClusterID = "default"
 const defaultAutoTLSCacheDir = ".autotls-cache"
